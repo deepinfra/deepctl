@@ -1,0 +1,155 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+
+  build:
+    name: build for all platforms
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      # Setup Rust, use the x86_64-apple-darwin target but the rest can be customized.
+      - name: Setup Rust
+        uses: ATiltedTree/setup-rust@v1
+        with:
+          targets: x86_64-apple-darwin
+          rust-version: stable
+
+      # Checkout your code
+      - name: Clone your Code
+        uses: actions/checkout@v3
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.2.0
+
+      - name: Install apple-codesign
+        run: cargo install apple-codesign
+
+      # Build your code for apple-darwin based release
+      - name: Build Your Code
+        run: cargo build --release --target x86_64-apple-darwin
+
+      # Build your code for apple-darwin based release
+      - name: Build Your Code
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/test-release')
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      # Setup Rust, use the x86_64-apple-darwin target but the rest can be customized.
+      - name: Setup Rust
+        uses: ATiltedTree/setup-rust@v1
+        with:
+          targets: x86_64-apple-darwin
+          rust-version: stable
+
+      # Use the v1 of this action
+      - name: Setup OSXCROSS
+        uses: mbround18/setup-osxcross@v1
+        # This builds executables & sets env variables for rust to consume.
+        with:
+          osx-version: "12.3"
+
+      # Checkout your code
+      - name: Clone your Code
+        uses: actions/checkout@v3
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.2.0
+
+      - name: Install apple-codesign
+        run: cargo install apple-codesign
+
+      # Build your code for apple-darwin based release
+      - name: Build Your Code
+        run: cargo build --release --target x86_64-apple-darwin
+
+      # Build your code for apple-darwin based release
+      - name: Build Your Code
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Get secrets
+        env:
+          CERT_PASSWORD: ${{ secrets.DEEP_INFRA_APPLE_CERT_PASSWORD }}
+          APP_STORE_CONNECT: ${{ secrets.DEEP_INFRA_APP_STORE_CONNECT }}
+          SIGNING_CERTIFICATE: ${{ secrets.DEEP_INFRA_SIGNING_CERTIFICATE }}
+        run: |
+          echo $CERT_PASSWORD > cert_password
+          echo $APP_STORE_CONNECT > app_store_connect.json
+          echo $SIGNING_CERTIFICATE | base64 -di > signing_certificate.p12
+      - name: ASppl
+        run: |
+          ls -la target/*/release/*
+          rcodesign sign \
+            --p12-file signing_certificate.p12 --p12-password-file cert_password \
+            --code-signature-flags runtime \
+            target/x86_64-apple-darwin/release/deepctl
+          
+          zip target/x86_64-apple-darwin/release/deepctl.zip target/x86_64-apple-darwin/release/deepctl
+          
+          rcodesign notary-submit \
+            --api-key-path app_store_connect.json \
+            --wait \
+            target/x86_64-apple-darwin/release/deepctl.zip
+
+      - name: Cleanup secrets
+        if: always()
+        run: |
+          rm cert_password
+          rm app_store_connect.json
+          rm signing_certificate.p12
+
+      - name: Prepare Release
+        run: |
+          mkdir release
+          cp target/x86_64-apple-darwin/release/deepctl release/deepctl-macos
+          cp target/x86_64-unknown-linux-gnu/release/deepctl release/deepctl-linux
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/test-release')
+        with:
+          files: |
+            release/deepctl-macos
+            release/deepctl-linux
+
+#      - name: release
+#        # TODO: This action is deprecated, use the new one.
+#        uses: actions/create-release@v1
+#        id: create_release
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        with:
+#          draft: false
+#          prerelease: false
+#          tag_name: ${{ github.ref }}
+#          release_name: ${{ github.ref }}
+#          # body_path: CHANGELOG.md
+#      - name: upload linux artifact
+#        uses: actions/upload-release-asset@v1
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        with:
+#          upload_url: ${{ steps.create_release.outputs.upload_url }}
+#          asset_path: target/x86_64-apple-darwin/release/deepctl
+#          asset_name: deepctl-apple
+#          asset_content_type: application/binary
+#      - name: upload linux artifact2
+#        uses: actions/upload-release-asset@v1
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        with:
+#          upload_url: ${{ steps.create_release.outputs.upload_url }}
+#          asset_path: target/x86_64-unknown-linux-gnu/release/deepctl
+#          asset_name: deepctl-linux
+#          asset_content_type: application/binary
+

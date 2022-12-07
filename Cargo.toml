@@ -1,0 +1,22 @@
+[package]
+name = "deepctl"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+webbrowser = "0.8.2"
+rand = "0.8.5"
+reqwest = { version = "0.11.13",  features = ["blocking", "multipart"] }
+dirs = "4.0.0"
+# switch to serde_yaml
+yaml-rust = "0.4.5"
+linked-hash-map = "0.5.3"
+version-compare = "0.1.1"
+chrono = { version = "0.4.23", features = ["serde"] }
+serde = { version = "1.0.148",  features = ["derive"] }
+serde_yaml = "0.9.14"
+serde_json = "1.0.89"
