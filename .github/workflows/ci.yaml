@@ -7,7 +7,7 @@ on:
 jobs:
 
   build:
-    name: build for all platforms
+    name: Build
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
@@ -25,9 +25,6 @@ jobs:
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.2.0
-
-      - name: Install apple-codesign
-        run: cargo install apple-codesign
 
       # Build your code for apple-darwin based release
       - name: Build Your Code
