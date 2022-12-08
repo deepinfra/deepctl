@@ -3,7 +3,7 @@ use std::process::exit;
 use clap::{Parser, Subcommand};
 use webbrowser;
 use reqwest;
-use std::fs;
+use std::{fs, io};
 use dirs;
 use std::fs::File;
 use std::io::prelude::*;
@@ -233,9 +233,10 @@ fn read_version_data() -> std::io::Result<VersionCheck> {
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 
-    let version_data = serde_yaml::from_str(&contents).unwrap();
-
-    Ok(version_data)
+    match serde_yaml::from_str(&contents) {
+        Ok(v) => Ok(v),
+        Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+    }
 }
 
 fn auth_logout(_dev: bool) -> std::io::Result<()> {
@@ -429,7 +430,7 @@ fn main() {
     let opts = Cli::parse();
 
     if !matches!(opts.command, Commands::Version{..}) {
-        main_version_check(opts.dev).unwrap();
+        main_version_check(opts.dev).ok();
     }
 
     match opts.command {
