@@ -77,23 +77,24 @@ jobs:
           echo $CERT_PASSWORD > cert_password
           echo $APP_STORE_CONNECT > app_store_connect.json
           echo $SIGNING_CERTIFICATE | base64 -di > signing_certificate.p12
-#      - name: Sign the MacOS binary
-#        run: |
-#          ls -la target/*/release/deepctl
-#          echo "Signing the MacOS binary"
-#          rcodesign sign \
-#            --p12-file signing_certificate.p12 --p12-password-file cert_password \
-#            --code-signature-flags runtime \
-#            target/x86_64-apple-darwin/release/deepctl
-#
-#          echo "Zipping"
-#          zip target/x86_64-apple-darwin/release/deepctl.zip target/x86_64-apple-darwin/release/deepctl
-#
-#          echo "Notarizing"
-#          rcodesign notary-submit \
-#            --api-key-path app_store_connect.json \
-#            --wait \
-#            target/x86_64-apple-darwin/release/deepctl.zip
+      - name: Sign the MacOS binary
+        run: |
+          ls -la target/*/release/deepctl
+          echo "Signing the MacOS binary"
+          rcodesign sign \
+            --p12-file signing_certificate.p12 --p12-password-file cert_password \
+            --code-signature-flags runtime \
+            target/x86_64-apple-darwin/release/deepctl
+
+          echo "Zipping"
+          zip target/x86_64-apple-darwin/release/deepctl.zip target/x86_64-apple-darwin/release/deepctl
+
+          echo "Notarizing"
+          rcodesign notary-submit \
+            --api-key-path app_store_connect.json \
+            --wait \
+            target/x86_64-apple-darwin/release/deepctl.zip
+          echo "Done notarizing"
 
       - name: Cleanup secrets
         if: always()
