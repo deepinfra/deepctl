@@ -170,16 +170,12 @@ fn auth_login(dev: bool) -> std::io::Result<()> {
         println!("opened login page");
         println!("waiting for login to complete");
 
-        let client = reqwest::blocking::Client::builder()
-            .danger_accept_invalid_certs(dev)
-            // Decide on the timeout
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .unwrap();
-
+        let client = get_http_client(dev);
         let backend_login_url = format!(
             "{}{}?login_id={}", host, "/github/cli/login", login_id);
-        let res = client.get(backend_login_url).send().unwrap();
+        let res = client.get(backend_login_url)
+            .timeout(std::time::Duration::from_secs(60))
+            .send().unwrap();
         let status = res.status();
         let body = res.text().unwrap();
         if status != reqwest::StatusCode::OK {
@@ -191,7 +187,7 @@ fn auth_login(dev: bool) -> std::io::Result<()> {
         let json: serde_json::Value = serde_json::from_str(&body).unwrap();
         // TODO: check if access token is there
         let token = json["access_token"].as_str().unwrap();
-        println!("access_token = {}", token);
+        // println!("access_token = {}", token);
 
         let mut m = LinkedHashMap::new();
         m.insert(Yaml::String("access_token".to_string()),
@@ -202,7 +198,7 @@ fn auth_login(dev: bool) -> std::io::Result<()> {
         emitter.dump(&yaml).unwrap();
         // file.write_all(out_str.as_bytes())?;
         write_config(&out_str).unwrap();
-        println!("access_token {}", get_access_token().unwrap());
+        // println!("access_token {}", get_access_token().unwrap());
         println!("login successful");
         Ok(())
     } else {
@@ -269,11 +265,17 @@ fn auth_logout(_dev: bool) -> std::io::Result<()> {
     Ok(())
 }
 
-fn models_list(dev: bool) -> std::io::Result<()> {
+
+fn get_http_client(dev: bool) -> reqwest::blocking::Client {
     let client = reqwest::blocking::Client::builder()
         .danger_accept_invalid_certs(dev)
         .build()
         .unwrap();
+    client
+}
+
+fn models_list(dev: bool) -> std::io::Result<()> {
+    let client = get_http_client(dev);
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
@@ -443,10 +445,7 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
 
 fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> std::io::Result<()> {
     println!("infer model_name: {} {:?}", model_name, args);
-    let client = reqwest::blocking::Client::builder()
-        .danger_accept_invalid_certs(dev)
-        .build()
-        .unwrap();
+    let client = get_http_client(dev);
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
@@ -490,10 +489,7 @@ fn infer_args_parser(s: &str) -> Result<(String, String), String> {
 }
 
 fn check_version_with_server(dev: bool) -> std::io::Result<VersionCheck> {
-    let client = reqwest::blocking::Client::builder()
-        .danger_accept_invalid_certs(dev)
-        .build()
-        .unwrap();
+    let client = get_http_client(dev);
     let host = get_host(dev);
 
     let now: DateTime<Utc> = Utc::now();
