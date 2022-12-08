@@ -19,20 +19,14 @@ jobs:
           targets: x86_64-apple-darwin
           rust-version: stable
 
-      # Checkout your code
       - name: Clone your Code
         uses: actions/checkout@v3
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.2.0
 
-      # Build your code for apple-darwin based release
-      - name: Build Your Code
-        run: cargo build --release --target x86_64-apple-darwin
-
-      # Build your code for apple-darwin based release
-      - name: Build Your Code
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+      - name: Build
+        run: cargo build
 
 
   release:
