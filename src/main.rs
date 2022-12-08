@@ -24,7 +24,6 @@ const LOGIN_PATH: &str = "/github/login";
 const VERSION_CHECK_SEC: i64 = 10;
 
 
-
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct VersionCheck {
     min: String,
