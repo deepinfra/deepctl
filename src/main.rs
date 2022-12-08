@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use linked_hash_map::LinkedHashMap;
 use std::process::exit;
 use clap::{Parser, Subcommand};
@@ -52,11 +53,11 @@ enum Commands {
         #[command(subcommand)]
         command: AuthCommands,
     },
-    /// deploy a model
+    /// model deployment commands
     Deploy {
         /// deploys a model
-        #[arg(short, long)]
-        model: String,
+        #[command(subcommand)]
+        command: DeployCommands,
     },
     /// model commands
     Model {
@@ -95,6 +96,27 @@ enum AuthCommands {
     Signup,
     /// show the current user
     Whoami,
+}
+
+#[derive(Subcommand)]
+enum DeployCommands {
+    /// list deployed models
+    List,
+    /// deploy a new model
+    Add {
+        #[arg(short, long)]
+        model: String,
+        #[arg(short, long)]
+        task: String,
+    },
+    /// get information on a particular deployment
+    Info {
+        deploy_id: String,
+    },
+    /// remove a deploymnet
+    Delete {
+        deploy_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -295,6 +317,130 @@ fn get_host(dev: bool) -> String {
     host
 }
 
+fn deploy_list(dev: bool) -> std::io::Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .danger_accept_invalid_certs(dev)
+        .build()
+        .unwrap();
+    let access_token = match get_access_token() {
+        Ok(token) => token,
+        Err(_) => {
+            println!("Not logged in. Please call `dictl auth login`");
+            exit(1)
+        }
+    };
+    let host = get_host(dev);
+    let url = format!("{}{}", host, "/deploy/list/");
+    let res = client.get(url)
+        .bearer_auth(&access_token)
+        .send().unwrap();
+    let body = res.text().unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    Ok(())
+}
+
+fn deploy_info(deploy_id: &str, dev: bool) -> std::io::Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .danger_accept_invalid_certs(dev)
+        .build()
+        .unwrap();
+    let access_token = match get_access_token() {
+        Ok(token) => token,
+        Err(_) => {
+            println!("Not logged in. Please call `dictl auth login`");
+            exit(1)
+        }
+    };
+    let host = get_host(dev);
+    let url = format!("{}{}{}", host, "/deploy/", deploy_id);
+    let res = client.get(url)
+        .bearer_auth(&access_token)
+        .send().unwrap();
+    let body = res.text().unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    Ok(())
+}
+
+fn deploy_delete(deploy_id: &str, dev: bool) -> std::io::Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .danger_accept_invalid_certs(dev)
+        .build()
+        .unwrap();
+    let access_token = match get_access_token() {
+        Ok(token) => token,
+        Err(_) => {
+            println!("Not logged in. Please call `dictl auth login`");
+            exit(1)
+        }
+    };
+    let host = get_host(dev);
+    let url = format!("{}{}{}", host, "/deploy/", deploy_id);
+    let res = client.delete(url)
+        .bearer_auth(&access_token)
+        .send().unwrap();
+    if res.status().is_success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "problem"))
+    }
+    // let body = res.text().unwrap();
+    // let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+    // println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    // Ok(())
+}
+
+fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
+    println!("deploy {} {}", model_name, task);
+    let client = reqwest::blocking::Client::builder()
+        .danger_accept_invalid_certs(dev)
+        .build()
+        .unwrap();
+    let access_token = match get_access_token() {
+        Ok(token) => token,
+        Err(_) => {
+            println!("Not logged in. Please call `dictl auth login`");
+            exit(1)
+        }
+    };
+    let mut params = HashMap::new();
+    params.insert("model_name", model_name);
+    params.insert("task", task);
+
+    let host = get_host(dev);
+    let url = format!("{}{}", host, "/deploy/hf/");
+    let res = client.post(url)
+        .bearer_auth(&access_token)
+        .header("Content-type", "application/json")
+        .body(serde_json::to_string(&params).unwrap())
+        .send().unwrap();
+
+    let body = res.text().unwrap();
+    println!("got body {}", body);
+    let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+    let deploy_id = json["deploy_id"].as_str().unwrap();
+    println!("deployed {} {} -> {}", model_name, task, deploy_id);
+    loop {
+        let tres = client
+            .get(format!("{}{}{}", host, "/deploy/", deploy_id))
+            .bearer_auth(&access_token)
+            .send().unwrap();
+        let tbody = tres.text().unwrap();
+        let tjson = serde_json::from_str::<serde_json::Value>(&tbody).unwrap();
+        println!("tjson: {}", tjson);
+        let status = tjson["status"].as_str().unwrap();
+        if status == "initializing" || status == "deploying" {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue
+        }
+        // TODO: Non-zero exit status on failed (what about deleted, stopping)?
+        println!("deployment {} --> {}", deploy_id, status);
+        break
+    }
+    Ok(())
+}
+
 fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> std::io::Result<()> {
     println!("infer model_name: {} {:?}", model_name, args);
     let client = reqwest::blocking::Client::builder()
@@ -442,7 +588,17 @@ fn main() {
                 AuthCommands::Whoami => println!("whoami"),
             }
         }
-        Commands::Deploy { model } => println!("deploy {}", model),
+        Commands::Deploy { command } => {
+            match command {
+                DeployCommands::List => deploy_list(opts.dev).unwrap(),
+                DeployCommands::Add { model, task } =>
+                    deploy_add(&model, &task, opts.dev).unwrap(),
+                DeployCommands::Info { deploy_id } =>
+                    deploy_info(&deploy_id, opts.dev).unwrap(),
+                DeployCommands::Delete { deploy_id } =>
+                    deploy_delete(&deploy_id, opts.dev).unwrap(),
+            }
+        }
         Commands::Infer { model, args} => infer(&model, args, opts.dev).unwrap(),
         Commands::Model { command } => {
             match command {
