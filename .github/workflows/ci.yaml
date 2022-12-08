@@ -1,6 +1,10 @@
 name: build
 
+# make this workflow run on self-hosted runner
+runs-on: [self-hosted, deepinfra]
+
 on:
+
   push:
   pull_request:
 
