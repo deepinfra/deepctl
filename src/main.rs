@@ -327,7 +327,7 @@ fn deploy_list(dev: bool) -> std::io::Result<()> {
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
-            println!("Not logged in. Please call `dictl auth login`");
+            println!("Not logged in. Please call `deepctl auth login`");
             exit(1)
         }
     };
@@ -350,7 +350,7 @@ fn deploy_info(deploy_id: &str, dev: bool) -> std::io::Result<()> {
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
-            println!("Not logged in. Please call `dictl auth login`");
+            println!("Not logged in. Please call `deepctl auth login`");
             exit(1)
         }
     };
@@ -373,7 +373,7 @@ fn deploy_delete(deploy_id: &str, dev: bool) -> std::io::Result<()> {
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
-            println!("Not logged in. Please call `dictl auth login`");
+            println!("Not logged in. Please call `deepctl auth login`");
             exit(1)
         }
     };
@@ -402,7 +402,7 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
-            println!("Not logged in. Please call `dictl auth login`");
+            println!("Not logged in. Please call `deepctl auth login`");
             exit(1)
         }
     };
