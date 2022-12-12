@@ -340,10 +340,7 @@ fn get_host(dev: bool) -> String {
 }
 
 fn deploy_list(dev: bool) -> std::io::Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .danger_accept_invalid_certs(dev)
-        .build()
-        .unwrap();
+    let client = get_http_client(dev);
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
@@ -363,10 +360,7 @@ fn deploy_list(dev: bool) -> std::io::Result<()> {
 }
 
 fn deploy_info(deploy_id: &str, dev: bool) -> std::io::Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .danger_accept_invalid_certs(dev)
-        .build()
-        .unwrap();
+    let client = get_http_client(dev);
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
@@ -386,10 +380,7 @@ fn deploy_info(deploy_id: &str, dev: bool) -> std::io::Result<()> {
 }
 
 fn deploy_delete(deploy_id: &str, dev: bool) -> std::io::Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .danger_accept_invalid_certs(dev)
-        .build()
-        .unwrap();
+    let client = get_http_client(dev);
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
@@ -415,10 +406,7 @@ fn deploy_delete(deploy_id: &str, dev: bool) -> std::io::Result<()> {
 
 fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
     println!("deploy {} {}", model_name, task);
-    let client = reqwest::blocking::Client::builder()
-        .danger_accept_invalid_certs(dev)
-        .build()
-        .unwrap();
+    let client = get_http_client(dev);
     let access_token = match get_access_token() {
         Ok(token) => token,
         Err(_) => {
