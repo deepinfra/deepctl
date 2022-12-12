@@ -308,6 +308,26 @@ fn models_list(dev: bool) -> std::io::Result<()> {
     Ok(())
 }
 
+fn model_info(model: &str, dev: bool) -> std::io::Result<()> {
+    let client = get_http_client(dev);
+    let host = get_host(dev);
+    let url = format!("{}{}{}", host, "/models/", model);
+    let res = client.get(url)
+        // .bearer_auth(access_token)
+        .send().unwrap();
+    let body = res.text().unwrap();
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    // println!("{:?}", json);
+    println!("model: {}", model);
+    println!("type : {}", json["type"].as_str().unwrap());
+    println!("CURL invocation:\n\n {}\n", json["curl_inv"].as_str().unwrap());
+    println!("deepctl invocation:\n\n {}\n", json["cmdline_inv"].as_str().unwrap());
+    println!("Field description:\n\n{}\n", json["txt_docs"].as_str().unwrap());
+
+    Ok(())
+}
+
 fn get_host(dev: bool) -> String {
     let host = match env::var("DEEPINFRA_HOST") {
         Ok(val) => val,
@@ -599,7 +619,7 @@ fn main() {
         Commands::Model { command } => {
             match command {
                 ModelCommands::List => models_list(opts.dev).unwrap(),
-                ModelCommands::Info { model } => println!("info {}", model),
+                ModelCommands::Info { model } => model_info(&model, opts.dev).unwrap(),
             }
         }
         Commands::Test { command } => {
