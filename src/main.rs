@@ -320,7 +320,10 @@ fn model_info(model: &str, dev: bool) -> std::io::Result<()> {
 
     // println!("{:?}", json);
     println!("model: {}", model);
-    println!("type : {}", json["type"].as_str().unwrap());
+    println!("type: {}", json["type"].as_str().unwrap());
+    if let Some(mask_token) = json["mask_token"].as_str() {
+        println!("mask token: {}", mask_token);
+    }
     println!("CURL invocation:\n\n {}\n", json["curl_inv"].as_str().unwrap());
     println!("deepctl invocation:\n\n {}\n", json["cmdline_inv"].as_str().unwrap());
     println!("Field description:\n\n{}\n", json["txt_docs"].as_str().unwrap());
