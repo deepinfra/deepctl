@@ -327,6 +327,8 @@ fn model_info(model: &str, dev: bool) -> std::io::Result<()> {
     println!("CURL invocation:\n\n {}\n", json["curl_inv"].as_str().unwrap());
     println!("deepctl invocation:\n\n {}\n", json["cmdline_inv"].as_str().unwrap());
     println!("Field description:\n\n{}\n", json["txt_docs"].as_str().unwrap());
+    println!("output example:\n\n{}\n", json["out_example"].as_str().unwrap());
+    println!("output fields description:\n\n{}\n", json["out_docs"].as_str().unwrap());
 
     Ok(())
 }
