@@ -532,7 +532,7 @@ fn check_version_with_server(dev: bool) -> std::io::Result<VersionCheck> {
 
 fn version_check(dev: bool) -> std::io::Result<()> {
     let version_data = check_version_with_server(dev)?;
-    do_version_check(&version_data)?;
+    do_version_check(&version_data, true)?;
     Ok(())
 }
 
@@ -548,11 +548,11 @@ fn main_version_check(dev: bool) -> std::io::Result<()> {
     } else {
         version_data
     };
-    do_version_check(&version_data)?;
+    do_version_check(&version_data, false)?;
     Ok(())
 }
 
-fn do_version_check(version_data: &VersionCheck) -> std::io::Result<()> {
+fn do_version_check(version_data: &VersionCheck, silent: bool) -> std::io::Result<()> {
     let this_version = Version::from(VERSION).unwrap();
     let min_version = Version::from(&version_data.min).unwrap();
     let update_version = Version::from(&version_data.update).unwrap();
@@ -567,7 +567,9 @@ fn do_version_check(version_data: &VersionCheck) -> std::io::Result<()> {
                  VERSION, version_data.latest);
         println!("Update to the latest version using `deepctl version update`");
     } else {
-        println!("Your version is up to date.");
+        if !silent {
+            println!("Your version ({}) is up to date.", VERSION);
+        }
     }
     Ok(())
 }
