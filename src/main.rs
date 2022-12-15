@@ -22,7 +22,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEEPINFRA_HOST_PROD: &str = "https://api.deepinfra.com";
 const DEEPINFRA_HOST_DEV: &str = "https://localhost:7001";
 const LOGIN_PATH: &str = "/github/login";
-const VERSION_CHECK_SEC: i64 = 10;
+const VERSION_CHECK_SEC: i64 = 60 * 60 * 24 * 7; // 1 week
 
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
