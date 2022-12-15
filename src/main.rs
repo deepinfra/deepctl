@@ -432,10 +432,11 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
         .send().unwrap();
 
     let body = res.text().unwrap();
-    println!("got body {}", body);
+    // println!("got body {}", body);
     let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
     let deploy_id = json["deploy_id"].as_str().unwrap();
     println!("deployed {} {} -> {}", model_name, task, deploy_id);
+    let mut last_status = String::new();
     loop {
         let tres = client
             .get(format!("{}{}{}", host, "/deploy/", deploy_id))
@@ -443,14 +444,19 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
             .send().unwrap();
         let tbody = tres.text().unwrap();
         let tjson = serde_json::from_str::<serde_json::Value>(&tbody).unwrap();
-        println!("tjson: {}", tjson);
+        // println!("tjson: {}", tjson);
         let status = tjson["status"].as_str().unwrap();
+        if status != last_status {
+            // print the status replacing the last line
+            println!("status: {}", status);
+            last_status = String::from(status);
+        }
         if status == "initializing" || status == "deploying" {
             std::thread::sleep(std::time::Duration::from_millis(100));
             continue
         }
         // TODO: Non-zero exit status on failed (what about deleted, stopping)?
-        println!("deployment {} --> {}", deploy_id, status);
+        println!("\ndeployment {} --> {}", deploy_id, status);
         break
     }
     Ok(())
