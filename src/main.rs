@@ -538,7 +538,7 @@ fn check_version_with_server(dev: bool) -> std::io::Result<VersionCheck> {
 
 fn version_check(dev: bool) -> std::io::Result<()> {
     let version_data = check_version_with_server(dev)?;
-    do_version_check(&version_data, true)?;
+    do_version_check(&version_data, false)?;
     Ok(())
 }
 
@@ -554,7 +554,7 @@ fn main_version_check(dev: bool) -> std::io::Result<()> {
     } else {
         version_data
     };
-    do_version_check(&version_data, false)?;
+    do_version_check(&version_data, true)?;
     Ok(())
 }
 
