@@ -488,6 +488,8 @@ fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> std::io::R
     let res = client.post(url)
         .bearer_auth(access_token)
         .multipart(form)
+        // TODO: make the timeout configurable
+        .timeout(std::time::Duration::from_secs(600))
         .send().unwrap();
     // println!("Status: {}", res.status());
     // println!("Headers:\n{:#?}", res.headers());
