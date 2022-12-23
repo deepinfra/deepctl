@@ -173,8 +173,9 @@ fn auth_login(dev: bool) -> std::io::Result<()> {
         let client = get_http_client(dev);
         let backend_login_url = format!(
             "{}{}?login_id={}", host, "/github/cli/login", login_id);
+        // TODO: handle timeout
         let res = client.get(backend_login_url)
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(300))
             .send().unwrap();
         let status = res.status();
         let body = res.text().unwrap();
