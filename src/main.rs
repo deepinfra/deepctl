@@ -198,7 +198,7 @@ fn auth_login(dev: bool) -> std::io::Result<()> {
         let mut emitter = YamlEmitter::new(&mut out_str);
         emitter.dump(&yaml).unwrap();
         // file.write_all(out_str.as_bytes())?;
-        write_config(&out_str).unwrap();
+        write_config(&out_str, dev).unwrap();
         // println!("access_token {}", get_access_token().unwrap());
         println!("login successful");
         Ok(())
@@ -208,34 +208,35 @@ fn auth_login(dev: bool) -> std::io::Result<()> {
     }
 }
 
-fn read_config() -> std::io::Result<String> {
-    let config_path = get_config_path()?;
+fn read_config(dev: bool) -> std::io::Result<String> {
+    let config_path = get_config_path(dev)?;
     let mut file = File::open(config_path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
     Ok(contents)
 }
 
-fn get_access_token() -> std::io::Result<String> {
-    let config = read_config()?;
+fn get_access_token(dev: bool) -> std::io::Result<String> {
+    let config = read_config(dev)?;
     let docs = YamlLoader::load_from_str(&config).unwrap();
     let doc = &docs[0];
     let access_token = doc["access_token"].as_str().unwrap();
     Ok(access_token.to_string())
 }
 
-fn write_config(config: &str) -> std::io::Result<()> {
-    let config_path = get_config_path()?;
+fn write_config(config: &str, dev: bool) -> std::io::Result<()> {
+    let config_path = get_config_path(dev)?;
     fs::create_dir_all(&config_path.parent().unwrap())?;
     let mut file = File::create(config_path)?;
     file.write_all(config.as_bytes())?;
     Ok(())
 }
 
-fn get_config_path() -> std::io::Result<std::path::PathBuf> {
+fn get_config_path(dev: bool) -> std::io::Result<std::path::PathBuf> {
     let home = dirs::home_dir().unwrap();
     let path = home.join(".deepinfra/");
-    let config_path = path.join("config.yaml");
+    let config_filename = if dev {"config_dev.yaml"} else {"config.yaml"};
+    let config_path = path.join(config_filename);
     Ok(config_path)
 }
 
@@ -260,7 +261,7 @@ fn read_version_data() -> std::io::Result<VersionCheck> {
 
 fn auth_logout(_dev: bool) -> std::io::Result<()> {
     // TODO: send request to the backend to let the backend know that the token is no longer valid
-    let config_path = get_config_path()?;
+    let config_path = get_config_path(_dev)?;
     fs::remove_file(config_path)?;
     println!("logout done");
     Ok(())
@@ -277,7 +278,7 @@ fn get_http_client(dev: bool) -> reqwest::blocking::Client {
 
 fn models_list(dev: bool) -> std::io::Result<()> {
     let client = get_http_client(dev);
-    let access_token = match get_access_token() {
+    let access_token = match get_access_token(dev) {
         Ok(token) => token,
         Err(_) => {
             println!("Not logged in. Please call `deepctl auth login`");
@@ -347,7 +348,7 @@ fn get_host(dev: bool) -> String {
 
 fn deploy_list(dev: bool) -> std::io::Result<()> {
     let client = get_http_client(dev);
-    let access_token = match get_access_token() {
+    let access_token = match get_access_token(dev) {
         Ok(token) => token,
         Err(_) => {
             println!("Not logged in. Please call `deepctl auth login`");
@@ -367,7 +368,7 @@ fn deploy_list(dev: bool) -> std::io::Result<()> {
 
 fn deploy_info(deploy_id: &str, dev: bool) -> std::io::Result<()> {
     let client = get_http_client(dev);
-    let access_token = match get_access_token() {
+    let access_token = match get_access_token(dev) {
         Ok(token) => token,
         Err(_) => {
             println!("Not logged in. Please call `deepctl auth login`");
@@ -387,7 +388,7 @@ fn deploy_info(deploy_id: &str, dev: bool) -> std::io::Result<()> {
 
 fn deploy_delete(deploy_id: &str, dev: bool) -> std::io::Result<()> {
     let client = get_http_client(dev);
-    let access_token = match get_access_token() {
+    let access_token = match get_access_token(dev) {
         Ok(token) => token,
         Err(_) => {
             println!("Not logged in. Please call `deepctl auth login`");
@@ -413,7 +414,7 @@ fn deploy_delete(deploy_id: &str, dev: bool) -> std::io::Result<()> {
 fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
     println!("deploy {} {}", model_name, task);
     let client = get_http_client(dev);
-    let access_token = match get_access_token() {
+    let access_token = match get_access_token(dev) {
         Ok(token) => token,
         Err(_) => {
             println!("Not logged in. Please call `deepctl auth login`");
@@ -466,7 +467,7 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
 fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> std::io::Result<()> {
     println!("infer model_name: {} {:?}", model_name, args);
     let client = get_http_client(dev);
-    let access_token = match get_access_token() {
+    let access_token = match get_access_token(dev) {
         Ok(token) => token,
         Err(_) => {
             println!("Not logged in. Please call `deepctl auth login`");
