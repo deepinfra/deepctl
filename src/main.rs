@@ -431,10 +431,19 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
         .bearer_auth(&access_token)
         .header("Content-type", "application/json")
         .body(serde_json::to_string(&params).unwrap())
-        .send().unwrap();
+        .send()
+        .unwrap_or_else(|e| {
+            println!("Error: {}", e);
+            exit(1)
+        });
 
+    let status = res.status();
     let body = res.text().unwrap();
-    // println!("got body {}", body);
+    if !status.is_success() {
+        println!("Error: {} {}", status, body);
+        exit(1)
+    }
+
     let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
     let deploy_id = json["deploy_id"].as_str().unwrap();
     println!("deployed {} {} -> {}", model_name, task, deploy_id);
@@ -443,7 +452,11 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
         let tres = client
             .get(format!("{}{}{}", host, "/deploy/", deploy_id))
             .bearer_auth(&access_token)
-            .send().unwrap();
+            .send()
+            .unwrap_or_else(|e| {
+                println!("Error: {}", e);
+                exit(1)
+            });
         let tbody = tres.text().unwrap();
         let tjson = serde_json::from_str::<serde_json::Value>(&tbody).unwrap();
         // println!("tjson: {}", tjson);
