@@ -119,3 +119,4 @@ jobs:
           files: |
             release/deepctl-macos
             release/deepctl-linux
+            install.sh
