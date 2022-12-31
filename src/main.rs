@@ -16,6 +16,7 @@ use version_compare::Version;
 use chrono::{DateTime, Utc, Duration};
 use serde::{Serialize, Deserialize};
 use chrono::serde::ts_seconds;
+use std::os::unix::fs::PermissionsExt;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -23,6 +24,7 @@ const DEEPINFRA_HOST_PROD: &str = "https://api.deepinfra.com";
 const DEEPINFRA_HOST_DEV: &str = "https://localhost:7001";
 const LOGIN_PATH: &str = "/github/login";
 const VERSION_CHECK_SEC: i64 = 60 * 60 * 24 * 7; // 1 week
+const GITHUB_RELEASE_LATEST: &str = "https://github.com/deepinfra/deepctl/releases/latest/download";
 
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -44,7 +46,6 @@ struct Cli {
     /// use dev host
     dev: bool,
 }
-
 
 #[derive(Subcommand)]
 enum Commands {
@@ -73,16 +74,10 @@ enum Commands {
         #[arg(short('i'), value_parser = infer_args_parser)]
         args: Vec<(String, String)>,
     },
-
-    /// test command with subcommands
-    Test {
-        #[command(subcommand)]
-        command: Option<TestSubcommands>,
-    },
     /// version command
     Version {
         #[command(subcommand)]
-        command: Option<VersionSubcommands>,
+        command: VersionSubcommands,
     }
 }
 
@@ -240,23 +235,17 @@ fn get_config_path(dev: bool) -> std::io::Result<std::path::PathBuf> {
     Ok(config_path)
 }
 
-fn get_version_path() -> std::io::Result<std::path::PathBuf> {
-    let home = dirs::home_dir().unwrap();
-    let path = home.join(".deepinfra/");
-    let config_path = path.join("version.yaml");
-    Ok(config_path)
+fn get_version_path() -> std::path::PathBuf {
+    dirs::home_dir().unwrap().join(".deepinfra").join("version.yaml")
 }
 
 fn read_version_data() -> std::io::Result<VersionCheck> {
-    let config_path = get_version_path()?;
-    let mut file = File::open(config_path)?;
+    let config_path = get_version_path();
+    let mut file = File::open(&config_path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 
-    match serde_yaml::from_str(&contents) {
-        Ok(v) => Ok(v),
-        Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
-    }
+    serde_yaml::from_str(&contents).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
 }
 
 fn auth_logout(_dev: bool) -> std::io::Result<()> {
@@ -553,26 +542,32 @@ fn check_version_with_server(dev: bool) -> std::io::Result<VersionCheck> {
     Ok(version_data)
 }
 
-fn version_check(dev: bool) -> std::io::Result<()> {
-    let version_data = check_version_with_server(dev)?;
-    do_version_check(&version_data, false)?;
-    Ok(())
-}
-
-fn main_version_check(dev: bool) -> std::io::Result<()> {
-    let mut version_data: VersionCheck = read_version_data()?;
-    // println!("min_version: {}", version_data.min);
-    // println!("update_version: {}", version_data.update);
-    // println!("latest_version: {}", version_data.latest);
-    // println!("last_check: {}", version_data.last_check);
-    version_data = if version_data.last_check < Utc::now() - Duration::seconds(VERSION_CHECK_SEC) {
+fn main_version_check(dev: bool, force: bool) -> std::io::Result<()> {
+    let crnt_version_data: Option<VersionCheck> = read_version_data().ok();
+    let version_data = if
+            crnt_version_data.is_none() ||
+            force ||
+            crnt_version_data.as_ref().unwrap().last_check < Utc::now() - Duration::seconds(VERSION_CHECK_SEC) {
         println!("checking version with server...");
         check_version_with_server(dev)?
     } else {
-        version_data
+        crnt_version_data.unwrap()
     };
     do_version_check(&version_data, true)?;
     Ok(())
+}
+
+fn prompt_update(reason: &str, latest: &str) {
+    println!("Your version {} is {}. Please update to the latest version {}.",
+             VERSION, reason, latest);
+
+    let mut sudo_str = "sudo ";
+    if let Ok(exe) = std::env::current_exe() {
+        if exe.as_path().starts_with(dirs::home_dir().unwrap().as_path()) {
+            sudo_str = "";
+        }
+    }
+    println!("Update to the latest version using `{}deepctl version update`", sudo_str);
 }
 
 fn do_version_check(version_data: &VersionCheck, silent: bool) -> std::io::Result<()> {
@@ -581,14 +576,10 @@ fn do_version_check(version_data: &VersionCheck, silent: bool) -> std::io::Resul
     let update_version = Version::from(&version_data.update).unwrap();
 
     if this_version < min_version {
-        println!("Your version {} is too old. Please update to the latest version {}.",
-                 VERSION, version_data.latest);
-        println!("Update to the latest version using `deepctl version update`");
+        prompt_update("too old", &version_data.latest);
         exit(1);
     } else if this_version < update_version {
-        println!("Your version ({}) is outdated. Please update to the latest version {}.",
-                 VERSION, version_data.latest);
-        println!("Update to the latest version using `deepctl version update`");
+        prompt_update("outdated", &version_data.latest)
     } else {
         if !silent {
             println!("Your version ({}) is up to date.", VERSION);
@@ -598,7 +589,7 @@ fn do_version_check(version_data: &VersionCheck, silent: bool) -> std::io::Resul
 }
 
 fn write_version_data(version_data: &VersionCheck) -> std::io::Result<()> {
-    let version_path = get_version_path()?;
+    let version_path = get_version_path();
     fs::create_dir_all(&version_path.parent().unwrap())?;
     let mut version_file = File::create(&version_path)?;
     let yaml = serde_yaml::to_string(&version_data).unwrap();
@@ -606,14 +597,54 @@ fn write_version_data(version_data: &VersionCheck) -> std::io::Result<()> {
     Ok(())
 }
 
+fn perform_update(dev: bool) -> std::io::Result<()> {
+    let suffix = if cfg!(target_os = "macos") {
+       "-macos"
+    } else {
+        "-linux"
+    };
+
+    let client = get_http_client(dev);
+    let uri = format!("{}/deepctl{}", GITHUB_RELEASE_LATEST, suffix);
+    let mut res = client.get(&uri)
+        .timeout(std::time::Duration::from_secs(300))
+        .send().unwrap_or_else(|why| panic!("Failed to fetch {}: {}", uri, why));
+    if !res.status().is_success() {
+        panic!("Failed to fetch {}", uri);
+    }
+
+    let current_exe = std::env::current_exe().unwrap_or_else(|why| {
+        panic!("Can't figure out where deepctl is installed: {}", why);
+    });
+    let mut tmp_exe = current_exe.clone();
+    tmp_exe.set_file_name(current_exe.file_name().unwrap().to_str().unwrap().to_owned() + ".tmp");
+    {
+        let mut tmp_exe_f = File::create(&tmp_exe)
+            .unwrap_or_else(|why| panic!("couldn't open {:?}: {}", tmp_exe, why));
+        res.copy_to(&mut tmp_exe_f)
+            .unwrap_or_else(|why| panic!("Failed to save new version to {:?}: {}", tmp_exe, why));
+    }
+    fs::set_permissions(&tmp_exe, fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::rename(&tmp_exe, &current_exe)
+        .unwrap_or_else(|why| panic!("Failed to rename {:?} to {:?}: {}", tmp_exe, current_exe, why));
+    Ok(())
+}
+
 fn main() {
     let opts = Cli::parse();
 
     if !matches!(opts.command, Commands::Version{..}) {
-        main_version_check(opts.dev).ok();
+        // User didn't ask for a version check|update, we check anyway.
+        main_version_check(opts.dev, false).unwrap();
     }
 
     match opts.command {
+        Commands::Version { command } => {
+            match command {
+                VersionSubcommands::Check => main_version_check(opts.dev, true).unwrap(),
+                VersionSubcommands::Update => perform_update(opts.dev).unwrap(),
+            }
+        }
         Commands::Auth { command } => {
             match command {
                 AuthCommands::Login => auth_login(opts.dev).unwrap(),
@@ -638,21 +669,6 @@ fn main() {
             match command {
                 ModelCommands::List => models_list(opts.dev).unwrap(),
                 ModelCommands::Info { model } => model_info(&model, opts.dev).unwrap(),
-            }
-        }
-        Commands::Test { command } => {
-            match command {
-                Some(TestSubcommands::Command1) => println!("test command1"),
-                Some(TestSubcommands::Command2) => println!("test command2"),
-                Some(TestSubcommands::Version) => println!("test version"),
-                None => println!("test"),
-            }
-        }
-        Commands::Version { command } => {
-            match command {
-                Some(VersionSubcommands::Check) => version_check(opts.dev).unwrap(),
-                Some(VersionSubcommands::Update) => println!("update"),
-                None => println!("{}", VERSION),
             }
         }
     }
