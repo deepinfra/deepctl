@@ -87,10 +87,10 @@ enum AuthCommands {
     Login,
     /// logout of Deep Infra
     Logout,
-    /// signup for Deep Infra
-    Signup,
-    /// show the current user
-    Whoami,
+    // /// signup for Deep Infra
+    // Signup,
+    // /// show the current user
+    // Whoami,
 }
 
 #[derive(Subcommand)]
@@ -641,37 +641,40 @@ fn main() {
     match opts.command {
         Commands::Version { command } => {
             match command {
-                VersionSubcommands::Check => main_version_check(opts.dev, true).unwrap(),
-                VersionSubcommands::Update => perform_update(opts.dev).unwrap(),
+                VersionSubcommands::Check => main_version_check(opts.dev, true),
+                VersionSubcommands::Update => perform_update(opts.dev),
             }
         }
         Commands::Auth { command } => {
             match command {
-                AuthCommands::Login => auth_login(opts.dev).unwrap(),
-                AuthCommands::Logout => auth_logout(opts.dev).unwrap(),
-                AuthCommands::Signup => println!("signup"),
-                AuthCommands::Whoami => println!("whoami"),
+                AuthCommands::Login => auth_login(opts.dev),
+                AuthCommands::Logout => auth_logout(opts.dev),
+                // AuthCommands::Signup => println!("signup"),
+                // AuthCommands::Whoami => println!("whoami"),
             }
         }
         Commands::Deploy { command } => {
             match command {
-                DeployCommands::List => deploy_list(opts.dev).unwrap(),
+                DeployCommands::List => deploy_list(opts.dev),
                 DeployCommands::Add { model, task } =>
-                    deploy_add(&model, &task, opts.dev).unwrap(),
+                    deploy_add(&model, &task, opts.dev),
                 DeployCommands::Info { deploy_id } =>
-                    deploy_info(&deploy_id, opts.dev).unwrap(),
+                    deploy_info(&deploy_id, opts.dev),
                 DeployCommands::Delete { deploy_id } =>
-                    deploy_delete(&deploy_id, opts.dev).unwrap(),
+                    deploy_delete(&deploy_id, opts.dev),
             }
         }
-        Commands::Infer { model, args} => infer(&model, args, opts.dev).unwrap(),
+        Commands::Infer { model, args} => infer(&model, args, opts.dev),
         Commands::Model { command } => {
             match command {
-                ModelCommands::List => models_list(opts.dev).unwrap(),
-                ModelCommands::Info { model } => model_info(&model, opts.dev).unwrap(),
+                ModelCommands::List => models_list(opts.dev),
+                ModelCommands::Info { model } => model_info(&model, opts.dev),
             }
         }
-    }
+    }.unwrap_or_else(|e| {
+        eprintln!("Failed: {}", e);
+        exit(1)
+    })
 }
 
 
