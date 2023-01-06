@@ -1,22 +1,24 @@
-use std::collections::HashMap;
-use linked_hash_map::LinkedHashMap;
-use std::process::exit;
+use anyhow::{Result, Context};
+use chrono::serde::ts_seconds;
+use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand};
-use webbrowser;
-use reqwest;
-use std::{fs, io};
 use dirs;
+use linked_hash_map::LinkedHashMap;
+use reqwest::blocking::multipart;
+use reqwest::{self, Method};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
-use yaml_rust::{YamlLoader, YamlEmitter};
-use yaml_rust::Yaml;
-use std::env;
-use reqwest::blocking::multipart;
-use version_compare::Version;
-use chrono::{DateTime, Utc, Duration};
-use serde::{Serialize, Deserialize};
-use chrono::serde::ts_seconds;
 use std::os::unix::fs::PermissionsExt;
+use std::process::exit;
+use thiserror::Error;
+use version_compare::Version;
+use webbrowser;
+use yaml_rust::Yaml;
+use yaml_rust::{YamlEmitter, YamlLoader};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -26,6 +28,15 @@ const LOGIN_PATH: &str = "/github/login";
 const VERSION_CHECK_SEC: i64 = 60 * 60 * 24 * 7; // 1 week
 const GITHUB_RELEASE_LATEST: &str = "https://github.com/deepinfra/deepctl/releases/latest/download";
 
+#[derive(Error, Debug)]
+pub enum DeepCtlError {
+    #[error("You need to log in first")]
+    NotLoggedIn(#[from] anyhow::Error),
+    #[error("Invalid configuration file")]
+    BadConfig,
+    #[error("Can't figure out {0} from environment")]
+    BadEnv(&'static str)
+}
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct VersionCheck {
@@ -78,7 +89,7 @@ enum Commands {
     Version {
         #[command(subcommand)]
         command: VersionSubcommands,
-    }
+    },
 }
 
 #[derive(Subcommand)]
@@ -87,10 +98,10 @@ enum AuthCommands {
     Login,
     /// logout of Deep Infra
     Logout,
-    /// signup for Deep Infra
-    Signup,
-    /// show the current user
-    Whoami,
+    // /// signup for Deep Infra
+    // Signup,
+    // /// show the current user
+    // Whoami,
 }
 
 #[derive(Subcommand)]
@@ -105,13 +116,9 @@ enum DeployCommands {
         task: String,
     },
     /// get information on a particular deployment
-    Info {
-        deploy_id: String,
-    },
+    Info { deploy_id: String },
     /// remove a deploymnet
-    Delete {
-        deploy_id: String,
-    },
+    Delete { deploy_id: String },
 }
 
 #[derive(Subcommand)]
@@ -133,7 +140,7 @@ enum TestSubcommands {
     /// test command2
     Command2,
     /// check cli version
-    Version
+    Version,
 }
 
 #[derive(Subcommand)]
@@ -155,7 +162,65 @@ fn random_string(len: usize) -> String {
         .collect()
 }
 
-fn auth_login(dev: bool) -> std::io::Result<()> {
+// TODO: Ensure query/path is properly encoded (use reqwest::Url)
+fn get_response_extra<BM>(
+    path: &str,
+    method: Method,
+    dev: bool,
+    auth: bool,
+    builder_map: BM,
+) -> Result<reqwest::blocking::Response>
+where
+    BM: FnOnce(reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder,
+{
+    let client = get_http_client(dev);
+    let host = get_host(dev);
+    let mut rb = client.request(method, format!("{}{}", host, path));
+
+    if auth {
+        let access_token = get_access_token(dev).map_err(DeepCtlError::NotLoggedIn)?;
+        rb = rb.bearer_auth(access_token);
+    }
+
+    rb = builder_map(rb);
+
+    Ok(rb.send()?)
+}
+
+fn get_response(
+    path: &str,
+    method: Method,
+    dev: bool,
+    auth: bool,
+) -> Result<reqwest::blocking::Response> {
+    get_response_extra(path, method, dev, auth, |rb| rb)
+}
+
+fn get_parsed_response_extra<BM>(
+    path: &str,
+    method: Method,
+    dev: bool,
+    auth: bool,
+    builder_map: BM,
+) -> Result<serde_json::Value>
+where
+    BM: FnOnce(reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder,
+{
+    let result = get_response_extra(path, method, dev, auth, builder_map)?.error_for_status()?;
+    let body = result.text()?;
+    Ok(serde_json::from_str(&body)?)
+}
+
+fn get_parsed_response(
+    path: &str,
+    method: Method,
+    dev: bool,
+    auth: bool,
+) -> Result<serde_json::Value> {
+    get_parsed_response_extra(path, method, dev, auth, |rb| rb)
+}
+
+fn auth_login(dev: bool) -> Result<()> {
     println!("auth login");
     let login_id = random_string(32);
     let host = get_host(dev);
@@ -164,36 +229,26 @@ fn auth_login(dev: bool) -> std::io::Result<()> {
     if webbrowser::open(&login_url).is_ok() {
         println!("opened login page");
         println!("waiting for login to complete");
-
-        let client = get_http_client(dev);
-        let backend_login_url = format!(
-            "{}{}?login_id={}", host, "/github/cli/login", login_id);
-        // TODO: handle timeout
-        let res = client.get(backend_login_url)
-            .timeout(std::time::Duration::from_secs(300))
-            .send().unwrap();
-        let status = res.status();
-        let body = res.text().unwrap();
-        if status != reqwest::StatusCode::OK {
-            println!("login request failed: {}: body:{}", status, body);
-            exit(1);
-        }
-        // println!("Headers:\n{:#?}", res.headers());
-        // println!("Body:\n{}", body);
-        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-        // TODO: check if access token is there
+        let json = get_parsed_response_extra(
+            &format!("/github/cli/login?login_id={}", login_id),
+            Method::GET,
+            dev,
+            false,
+            |rb| rb.timeout(std::time::Duration::from_secs(300)),
+        ).context("waiting for auth result from backend")?;
         let token = json["access_token"].as_str().unwrap();
-        // println!("access_token = {}", token);
 
         let mut m = LinkedHashMap::new();
-        m.insert(Yaml::String("access_token".to_string()),
-                 Yaml::String(token.to_string()));
+        m.insert(
+            Yaml::String("access_token".to_string()),
+            Yaml::String(token.to_string()),
+        );
         let yaml = Yaml::Hash(m);
         let mut out_str = String::new();
         let mut emitter = YamlEmitter::new(&mut out_str);
         emitter.dump(&yaml).unwrap();
         // file.write_all(out_str.as_bytes())?;
-        write_config(&out_str, dev).unwrap();
+        write_config(&out_str, dev).context("storing login token")?;
         // println!("access_token {}", get_access_token().unwrap());
         println!("login successful");
         Ok(())
@@ -203,7 +258,7 @@ fn auth_login(dev: bool) -> std::io::Result<()> {
     }
 }
 
-fn read_config(dev: bool) -> std::io::Result<String> {
+fn read_config(dev: bool) -> Result<String> {
     let config_path = get_config_path(dev)?;
     let mut file = File::open(config_path)?;
     let mut contents = String::new();
@@ -211,15 +266,17 @@ fn read_config(dev: bool) -> std::io::Result<String> {
     Ok(contents)
 }
 
-fn get_access_token(dev: bool) -> std::io::Result<String> {
+fn get_access_token(dev: bool) -> Result<String> {
     let config = read_config(dev)?;
-    let docs = YamlLoader::load_from_str(&config).unwrap();
+    let docs = YamlLoader::load_from_str(&config)?;
     let doc = &docs[0];
-    let access_token = doc["access_token"].as_str().unwrap();
+    let access_token = doc["access_token"]
+        .as_str()
+        .ok_or(DeepCtlError::BadConfig)?;
     Ok(access_token.to_string())
 }
 
-fn write_config(config: &str, dev: bool) -> std::io::Result<()> {
+fn write_config(config: &str, dev: bool) -> Result<()> {
     let config_path = get_config_path(dev)?;
     fs::create_dir_all(&config_path.parent().unwrap())?;
     let mut file = File::create(config_path)?;
@@ -227,35 +284,40 @@ fn write_config(config: &str, dev: bool) -> std::io::Result<()> {
     Ok(())
 }
 
-fn get_config_path(dev: bool) -> std::io::Result<std::path::PathBuf> {
-    let home = dirs::home_dir().unwrap();
-    let path = home.join(".deepinfra/");
-    let config_filename = if dev {"config_dev.yaml"} else {"config.yaml"};
-    let config_path = path.join(config_filename);
-    Ok(config_path)
+fn get_config_path(dev: bool) -> Result<std::path::PathBuf> {
+    let cfg_path = dirs::home_dir()
+            .ok_or(DeepCtlError::BadEnv("home_dir"))?
+            .join(".deepinfra/");
+    let cfg_file = if dev {
+        "config_dev.yaml"
+    } else {
+        "config.yaml"
+    };
+    Ok(cfg_path.join(cfg_file))
 }
 
-fn get_version_path() -> std::path::PathBuf {
-    dirs::home_dir().unwrap().join(".deepinfra").join("version.yaml")
+fn get_version_path() -> Result<std::path::PathBuf> {
+    Ok(dirs::home_dir().ok_or(DeepCtlError::BadEnv("home_dir"))?
+        .join(".deepinfra")
+        .join("version.yaml"))
 }
 
-fn read_version_data() -> std::io::Result<VersionCheck> {
-    let config_path = get_version_path();
+fn read_version_data() -> Result<VersionCheck> {
+    let config_path = get_version_path()?;
     let mut file = File::open(&config_path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 
-    serde_yaml::from_str(&contents).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    Ok(serde_yaml::from_str(&contents)?)
 }
 
-fn auth_logout(_dev: bool) -> std::io::Result<()> {
+fn auth_logout(_dev: bool) -> Result<()> {
     // TODO: send request to the backend to let the backend know that the token is no longer valid
     let config_path = get_config_path(_dev)?;
     fs::remove_file(config_path)?;
     println!("logout done");
     Ok(())
 }
-
 
 fn get_http_client(dev: bool) -> reqwest::blocking::Client {
     let client = reqwest::blocking::Client::builder()
@@ -265,31 +327,18 @@ fn get_http_client(dev: bool) -> reqwest::blocking::Client {
     client
 }
 
-fn models_list(dev: bool) -> std::io::Result<()> {
-    let client = get_http_client(dev);
-    let access_token = match get_access_token(dev) {
-        Ok(token) => token,
-        Err(_) => {
-            println!("Not logged in. Please call `deepctl auth login`");
-            exit(1)
-        }
-    };
-    let host = get_host(dev);
-    let url = format!("{}{}", host, "/models/list");
-    let res = client.get(url)
-        .bearer_auth(access_token)
-        .send().unwrap();
-    // println!("Status: {}", res.status());
-    // println!("Headers:\n{:#?}", res.headers());
-    let body = res.text().unwrap();
-    //println!("Body:\n{}", body);
-    println!("Models:");
-    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let mut models = json.as_array().unwrap().iter().map(|model| {
-        let model_name = model["model_name"].as_str().unwrap();
-        let m_type = model["type"].as_str().unwrap();
-        (m_type, model_name)
-    }).collect::<Vec<(&str, &str)>>();
+fn models_list(dev: bool) -> Result<()> {
+    let json = get_parsed_response("/models/list", Method::GET, dev, true)?;
+    let mut models = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|model| {
+            let model_name = model["model_name"].as_str().unwrap();
+            let m_type = model["type"].as_str().unwrap();
+            (m_type, model_name)
+        })
+        .collect::<Vec<(&str, &str)>>();
 
     models.sort();
 
@@ -299,15 +348,8 @@ fn models_list(dev: bool) -> std::io::Result<()> {
     Ok(())
 }
 
-fn model_info(model: &str, dev: bool) -> std::io::Result<()> {
-    let client = get_http_client(dev);
-    let host = get_host(dev);
-    let url = format!("{}{}{}", host, "/models/", model);
-    let res = client.get(url)
-        // .bearer_auth(access_token)
-        .send().unwrap();
-    let body = res.text().unwrap();
-    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+fn model_info(model: &str, dev: bool) -> Result<()> {
+    let json = get_parsed_response(&format!("/models/{}", model), Method::GET, dev, false)?;
 
     // println!("{:?}", json);
     println!("model: {}", model);
@@ -315,11 +357,26 @@ fn model_info(model: &str, dev: bool) -> std::io::Result<()> {
     if let Some(mask_token) = json["mask_token"].as_str() {
         println!("mask token: {}", mask_token);
     }
-    println!("CURL invocation:\n\n {}\n", json["curl_inv"].as_str().unwrap());
-    println!("deepctl invocation:\n\n {}\n", json["cmdline_inv"].as_str().unwrap());
-    println!("Field description:\n\n{}\n", json["txt_docs"].as_str().unwrap());
-    println!("output example:\n\n{}\n", json["out_example"].as_str().unwrap());
-    println!("output fields description:\n\n{}\n", json["out_docs"].as_str().unwrap());
+    println!(
+        "CURL invocation:\n\n {}\n",
+        json["curl_inv"].as_str().unwrap()
+    );
+    println!(
+        "deepctl invocation:\n\n {}\n",
+        json["cmdline_inv"].as_str().unwrap()
+    );
+    println!(
+        "Field description:\n\n{}\n",
+        json["txt_docs"].as_str().unwrap()
+    );
+    println!(
+        "output example:\n\n{}\n",
+        json["out_example"].as_str().unwrap()
+    );
+    println!(
+        "output fields description:\n\n{}\n",
+        json["out_docs"].as_str().unwrap()
+    );
 
     Ok(())
 }
@@ -330,125 +387,43 @@ fn get_host(dev: bool) -> String {
         Err(_) => match dev {
             true => DEEPINFRA_HOST_DEV.to_string(),
             false => DEEPINFRA_HOST_PROD.to_string(),
-        }
+        },
     };
     host
 }
 
-fn deploy_list(dev: bool) -> std::io::Result<()> {
-    let client = get_http_client(dev);
-    let access_token = match get_access_token(dev) {
-        Ok(token) => token,
-        Err(_) => {
-            println!("Not logged in. Please call `deepctl auth login`");
-            exit(1)
-        }
-    };
-    let host = get_host(dev);
-    let url = format!("{}{}", host, "/deploy/list/");
-    let res = client.get(url)
-        .bearer_auth(&access_token)
-        .send().unwrap();
-    let body = res.text().unwrap();
-    let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+fn deploy_list(dev: bool) -> Result<()> {
+    let json = get_parsed_response("/deploy/list", Method::GET, dev, true)?;
     println!("{}", serde_json::to_string_pretty(&json).unwrap());
     Ok(())
 }
 
-fn deploy_info(deploy_id: &str, dev: bool) -> std::io::Result<()> {
-    let client = get_http_client(dev);
-    let access_token = match get_access_token(dev) {
-        Ok(token) => token,
-        Err(_) => {
-            println!("Not logged in. Please call `deepctl auth login`");
-            exit(1)
-        }
-    };
-    let host = get_host(dev);
-    let url = format!("{}{}{}", host, "/deploy/", deploy_id);
-    let res = client.get(url)
-        .bearer_auth(&access_token)
-        .send().unwrap();
-    let body = res.text().unwrap();
-    let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+fn deploy_info(deploy_id: &str, dev: bool) -> Result<()> {
+    let json = get_parsed_response(&format!("/deploy/{}", deploy_id), Method::GET, dev, true)?;
     println!("{}", serde_json::to_string_pretty(&json).unwrap());
     Ok(())
 }
 
-fn deploy_delete(deploy_id: &str, dev: bool) -> std::io::Result<()> {
-    let client = get_http_client(dev);
-    let access_token = match get_access_token(dev) {
-        Ok(token) => token,
-        Err(_) => {
-            println!("Not logged in. Please call `deepctl auth login`");
-            exit(1)
-        }
-    };
-    let host = get_host(dev);
-    let url = format!("{}{}{}", host, "/deploy/", deploy_id);
-    let res = client.delete(url)
-        .bearer_auth(&access_token)
-        .send().unwrap();
-    if res.status().is_success() {
-        Ok(())
-    } else {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "problem"))
-    }
-    // let body = res.text().unwrap();
-    // let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
-    // println!("{}", serde_json::to_string_pretty(&json).unwrap());
-    // Ok(())
+fn deploy_delete(deploy_id: &str, dev: bool) -> Result<()> {
+    get_response(&format!("/deply/{}", deploy_id), Method::DELETE, dev, true)?
+        .error_for_status()?;
+    Ok(())
 }
 
-fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
-    println!("deploy {} {}", model_name, task);
-    let client = get_http_client(dev);
-    let access_token = match get_access_token(dev) {
-        Ok(token) => token,
-        Err(_) => {
-            println!("Not logged in. Please call `deepctl auth login`");
-            exit(1)
-        }
-    };
-    let mut params = HashMap::new();
-    params.insert("model_name", model_name);
-    params.insert("task", task);
+fn deploy_add(model_name: &str, task: &str, dev: bool) -> Result<()> {
+    let params = HashMap::from([("model_name", model_name), ("task", task)]);
+    let body = serde_json::to_string(&params)?;
 
-    let host = get_host(dev);
-    let url = format!("{}{}", host, "/deploy/hf/");
-    let res = client.post(url)
-        .bearer_auth(&access_token)
-        .header("Content-type", "application/json")
-        .body(serde_json::to_string(&params).unwrap())
-        .send()
-        .unwrap_or_else(|e| {
-            println!("Error: {}", e);
-            exit(1)
-        });
+    let json = get_parsed_response_extra("/deploy/hf", Method::POST, dev, true, |rb| {
+        rb.header("Content-type", "application/json").body(body)
+    })?;
 
-    let status = res.status();
-    let body = res.text().unwrap();
-    if !status.is_success() {
-        println!("Error: {} {}", status, body);
-        exit(1)
-    }
-
-    let json = serde_json::from_str::<serde_json::Value>(&body).unwrap();
     let deploy_id = json["deploy_id"].as_str().unwrap();
     println!("deployed {} {} -> {}", model_name, task, deploy_id);
     let mut last_status = String::new();
     loop {
-        let tres = client
-            .get(format!("{}{}{}", host, "/deploy/", deploy_id))
-            .bearer_auth(&access_token)
-            .send()
-            .unwrap_or_else(|e| {
-                println!("Error: {}", e);
-                exit(1)
-            });
-        let tbody = tres.text().unwrap();
-        let tjson = serde_json::from_str::<serde_json::Value>(&tbody).unwrap();
-        // println!("tjson: {}", tjson);
+        let tjson =
+            get_parsed_response(&format!("/deploy/{}", &deploy_id), Method::GET, dev, true)?;
         let status = tjson["status"].as_str().unwrap();
         if status != last_status {
             // print the status replacing the last line
@@ -457,28 +432,16 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> std::io::Result<()> {
         }
         if status == "initializing" || status == "deploying" {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            continue
+            continue;
         }
         // TODO: Non-zero exit status on failed (what about deleted, stopping)?
         println!("\ndeployment {} --> {}", deploy_id, status);
-        break
+        break;
     }
     Ok(())
 }
 
-fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> std::io::Result<()> {
-    println!("infer model_name: {} {:?}", model_name, args);
-    let client = get_http_client(dev);
-    let access_token = match get_access_token(dev) {
-        Ok(token) => token,
-        Err(_) => {
-            println!("Not logged in. Please call `deepctl auth login`");
-            exit(1)
-        }
-    };
-    let host = get_host(dev);
-    let url = format!("{}{}{}", host, "/v1/inference/", model_name);
-
+fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> Result<()> {
     let mut form = multipart::Form::new();
     for (key, value) in args {
         if value.starts_with("@") {
@@ -488,17 +451,18 @@ fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> std::io::R
         }
     }
 
-    // println!("form: {:?}", form);
-    let res = client.post(url)
-        .bearer_auth(access_token)
-        .multipart(form)
-        // TODO: make the timeout configurable
-        .timeout(std::time::Duration::from_secs(600))
-        .send().unwrap();
-    // println!("Status: {}", res.status());
-    // println!("Headers:\n{:#?}", res.headers());
-    let body = res.text().unwrap();
-    println!("{}", body);
+    let json = get_parsed_response_extra(
+        &format!("/v1/inference/{}", model_name),
+        Method::POST,
+        dev,
+        true,
+        move |rb| {
+            rb.timeout(std::time::Duration::from_secs(600))
+                .multipart(form)
+        },
+    )?;
+
+    println!("{}", serde_json::to_string_pretty(&json).unwrap());
     Ok(())
 }
 
@@ -513,19 +477,14 @@ fn infer_args_parser(s: &str) -> Result<(String, String), String> {
     Ok((key.to_string(), value.to_string()))
 }
 
-fn check_version_with_server(dev: bool) -> std::io::Result<VersionCheck> {
-    let client = get_http_client(dev);
-    let host = get_host(dev);
-
-    let now: DateTime<Utc> = Utc::now();
-
-
-
-    let url = format!("{}{}?version={}", host, "/cli/version", VERSION);
-    let res = client.get(url).send().unwrap();
-    let body = res.text().unwrap();
-    // println!("{}", body);
-    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+fn check_version_with_server(dev: bool) -> Result<VersionCheck> {
+    let now = Utc::now();
+    let json = get_parsed_response(
+        &format!("/cli/version?version={}", VERSION),
+        Method::GET,
+        dev,
+        false,
+    )?;
     let min_version_str = json["min"].as_str().unwrap();
 
     let update_version_str = json["update"].as_str().unwrap();
@@ -542,12 +501,13 @@ fn check_version_with_server(dev: bool) -> std::io::Result<VersionCheck> {
     Ok(version_data)
 }
 
-fn main_version_check(dev: bool, force: bool) -> std::io::Result<()> {
+fn main_version_check(dev: bool, force: bool) -> Result<()> {
     let crnt_version_data: Option<VersionCheck> = read_version_data().ok();
-    let version_data = if
-            crnt_version_data.is_none() ||
-            force ||
-            crnt_version_data.as_ref().unwrap().last_check < Utc::now() - Duration::seconds(VERSION_CHECK_SEC) {
+    let version_data = if crnt_version_data.is_none()
+        || force
+        || crnt_version_data.as_ref().unwrap().last_check
+            < Utc::now() - Duration::seconds(VERSION_CHECK_SEC)
+    {
         println!("checking version with server...");
         check_version_with_server(dev)?
     } else {
@@ -558,19 +518,27 @@ fn main_version_check(dev: bool, force: bool) -> std::io::Result<()> {
 }
 
 fn prompt_update(reason: &str, latest: &str) {
-    println!("Your version {} is {}. Please update to the latest version {}.",
-             VERSION, reason, latest);
+    println!(
+        "Your version {} is {}. Please update to the latest version {}.",
+        VERSION, reason, latest
+    );
 
     let mut sudo_str = "sudo ";
     if let Ok(exe) = std::env::current_exe() {
-        if exe.as_path().starts_with(dirs::home_dir().unwrap().as_path()) {
+        if exe
+            .as_path()
+            .starts_with(dirs::home_dir().unwrap().as_path())
+        {
             sudo_str = "";
         }
     }
-    println!("Update to the latest version using `{}deepctl version update`", sudo_str);
+    println!(
+        "Update to the latest version using `{}deepctl version update`",
+        sudo_str
+    );
 }
 
-fn do_version_check(version_data: &VersionCheck, silent: bool) -> std::io::Result<()> {
+fn do_version_check(version_data: &VersionCheck, silent: bool) -> Result<()> {
     let this_version = Version::from(VERSION).unwrap();
     let min_version = Version::from(&version_data.min).unwrap();
     let update_version = Version::from(&version_data.update).unwrap();
@@ -588,8 +556,8 @@ fn do_version_check(version_data: &VersionCheck, silent: bool) -> std::io::Resul
     Ok(())
 }
 
-fn write_version_data(version_data: &VersionCheck) -> std::io::Result<()> {
-    let version_path = get_version_path();
+fn write_version_data(version_data: &VersionCheck) -> Result<()> {
+    let version_path = get_version_path()?;
     fs::create_dir_all(&version_path.parent().unwrap())?;
     let mut version_file = File::create(&version_path)?;
     let yaml = serde_yaml::to_string(&version_data).unwrap();
@@ -597,83 +565,93 @@ fn write_version_data(version_data: &VersionCheck) -> std::io::Result<()> {
     Ok(())
 }
 
-fn perform_update(dev: bool) -> std::io::Result<()> {
+fn perform_update(dev: bool) -> Result<()> {
     let suffix = if cfg!(target_os = "macos") {
-       "-macos"
+        "-macos"
     } else {
         "-linux"
     };
 
     let client = get_http_client(dev);
     let uri = format!("{}/deepctl{}", GITHUB_RELEASE_LATEST, suffix);
-    let mut res = client.get(&uri)
+    let mut res = client
+        .get(&uri)
         .timeout(std::time::Duration::from_secs(300))
-        .send().unwrap_or_else(|why| panic!("Failed to fetch {}: {}", uri, why));
-    if !res.status().is_success() {
-        panic!("Failed to fetch {}", uri);
-    }
+        .send()?
+        .error_for_status()?;
 
-    let current_exe = std::env::current_exe().unwrap_or_else(|why| {
-        panic!("Can't figure out where deepctl is installed: {}", why);
-    });
-    let mut tmp_exe = current_exe.clone();
-    tmp_exe.set_file_name(current_exe.file_name().unwrap().to_str().unwrap().to_owned() + ".tmp");
+    let current_exe = std::env::current_exe()?;
+    let tmp_exe = {
+        let mut tmp_exe_name = current_exe.as_os_str().to_owned();
+        tmp_exe_name.push(".tmp");    
+        std::path::PathBuf::from(tmp_exe_name)
+    };
+
     {
-        let mut tmp_exe_f = File::create(&tmp_exe)
-            .unwrap_or_else(|why| panic!("couldn't open {:?}: {}", tmp_exe, why));
-        res.copy_to(&mut tmp_exe_f)
-            .unwrap_or_else(|why| panic!("Failed to save new version to {:?}: {}", tmp_exe, why));
+        let mut tmp_exe_f = File::create(&tmp_exe)?;
+        res.copy_to(&mut tmp_exe_f)?;
     }
-    fs::set_permissions(&tmp_exe, fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::rename(&tmp_exe, &current_exe)
-        .unwrap_or_else(|why| panic!("Failed to rename {:?} to {:?}: {}", tmp_exe, current_exe, why));
+    fs::set_permissions(&tmp_exe, fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(&tmp_exe, &current_exe)?;
     Ok(())
+}
+
+fn find_in_chain<T>(e: &anyhow::Error) -> Option<&T>
+where
+    T: std::error::Error + 'static,
+{
+    for cause in e.chain() {
+        if let Some(te) = cause.downcast_ref::<T>() {
+            return Some(te);
+        }
+    }
+    None
 }
 
 fn main() {
     let opts = Cli::parse();
 
-    if !matches!(opts.command, Commands::Version{..}) {
+    if !matches!(opts.command, Commands::Version { .. }) {
         // User didn't ask for a version check|update, we check anyway.
         main_version_check(opts.dev, false).unwrap();
     }
 
     match opts.command {
-        Commands::Version { command } => {
-            match command {
-                VersionSubcommands::Check => main_version_check(opts.dev, true).unwrap(),
-                VersionSubcommands::Update => perform_update(opts.dev).unwrap(),
-            }
-        }
+        Commands::Version { command } => match command {
+            VersionSubcommands::Check => main_version_check(opts.dev, true),
+            VersionSubcommands::Update => perform_update(opts.dev),
+        },
         Commands::Auth { command } => {
             match command {
-                AuthCommands::Login => auth_login(opts.dev).unwrap(),
-                AuthCommands::Logout => auth_logout(opts.dev).unwrap(),
-                AuthCommands::Signup => println!("signup"),
-                AuthCommands::Whoami => println!("whoami"),
+                AuthCommands::Login => auth_login(opts.dev),
+                AuthCommands::Logout => auth_logout(opts.dev),
+                // AuthCommands::Signup => println!("signup"),
+                // AuthCommands::Whoami => println!("whoami"),
             }
         }
-        Commands::Deploy { command } => {
-            match command {
-                DeployCommands::List => deploy_list(opts.dev).unwrap(),
-                DeployCommands::Add { model, task } =>
-                    deploy_add(&model, &task, opts.dev).unwrap(),
-                DeployCommands::Info { deploy_id } =>
-                    deploy_info(&deploy_id, opts.dev).unwrap(),
-                DeployCommands::Delete { deploy_id } =>
-                    deploy_delete(&deploy_id, opts.dev).unwrap(),
-            }
-        }
-        Commands::Infer { model, args} => infer(&model, args, opts.dev).unwrap(),
-        Commands::Model { command } => {
-            match command {
-                ModelCommands::List => models_list(opts.dev).unwrap(),
-                ModelCommands::Info { model } => model_info(&model, opts.dev).unwrap(),
-            }
-        }
+        Commands::Deploy { command } => match command {
+            DeployCommands::List => deploy_list(opts.dev),
+            DeployCommands::Add { model, task } => deploy_add(&model, &task, opts.dev),
+            DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
+            DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
+        },
+        Commands::Infer { model, args } => infer(&model, args, opts.dev),
+        Commands::Model { command } => match command {
+            ModelCommands::List => models_list(opts.dev),
+            ModelCommands::Info { model } => model_info(&model, opts.dev),
+        },
     }
+    .unwrap_or_else(|e| {
+        if let Some(de) = find_in_chain::<DeepCtlError>(&e) {
+            if matches!(de, DeepCtlError::NotLoggedIn(..)) {
+                eprintln!("Not logged in. Please call `deepctl auth login`");
+                exit(1)
+            }
+        }
+        eprintln!("Failed: {:?}", e);
+        exit(1)
+    })
 }
-
 
 // deepctl auth signup
 // deepctl auth login
