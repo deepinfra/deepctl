@@ -1,7 +1,7 @@
 use anyhow::{Result, Context};
 use chrono::serde::ts_seconds;
 use chrono::{DateTime, Duration, Utc};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use dirs;
 use linked_hash_map::LinkedHashMap;
 use reqwest::blocking::multipart;
@@ -35,7 +35,9 @@ pub enum DeepCtlError {
     #[error("Invalid configuration file")]
     BadConfig,
     #[error("Can't figure out {0} from environment")]
-    BadEnv(&'static str)
+    BadEnv(&'static str),
+    #[error("backend returned wrong/unexpected object")]
+    ApiMismatch(&'static str),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -107,7 +109,11 @@ enum AuthCommands {
 #[derive(Subcommand)]
 enum DeployCommands {
     /// list deployed models
-    List,
+    List {
+        /// show only deploys in given state
+        #[arg(long, value_enum, default_value_t=DeployState::ACTIVE)]
+        state: DeployState,
+    },
     /// deploy a new model
     Add {
         #[arg(short, long)]
@@ -149,6 +155,24 @@ enum VersionSubcommands {
     Check,
     /// self update to latest version
     Update,
+}
+
+/// deploy state
+#[derive(ValueEnum, Eq, PartialEq, Hash, Clone, Debug)]
+enum DeployState {
+    /// any state
+    ANY,
+    /// initializing, deploying or running
+    ACTIVE,
+    /// failed or deleted
+    INACTIVE,
+    /// initializing or deploying
+    PENDING,
+    INITIALIZING,
+    DEPLOYING,
+    RUNNING,
+    FAILED,
+    DELETED,
 }
 
 fn random_string(len: usize) -> String {
@@ -392,9 +416,26 @@ fn get_host(dev: bool) -> String {
     host
 }
 
-fn deploy_list(dev: bool) -> Result<()> {
+fn deploy_list(dev: bool, state: DeployState) -> Result<()> {
     let json = get_parsed_response("/deploy/list/", Method::GET, dev, true)?;
-    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    let allowed_statuses = match state {
+        DeployState::ACTIVE => vec!["initializing", "deploying", "running"],
+        DeployState::INACTIVE => vec!["failed", "deleted"],
+        DeployState::PENDING => vec!["initializing", "deploying"],
+        DeployState::ANY => vec!["initializing", "deploying", "running", "failed", "deleted"],
+        DeployState::INITIALIZING => vec!["initializing"],
+        DeployState::DEPLOYING => vec!["deploying"],
+        DeployState::RUNNING => vec!["running"],
+        DeployState::FAILED => vec!["failed"],
+        DeployState::DELETED => vec!["deleted"],
+    };
+    let deploys: Vec<&serde_json::Value> = json.as_array()
+        // .unwrap();
+        .ok_or(DeepCtlError::ApiMismatch("/delpoy/list/ result is not an array"))?
+        .iter()
+        .filter(|d| allowed_statuses.contains(&d["status"].as_str().unwrap()))
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&deploys).unwrap());
     Ok(())
 }
 
@@ -630,7 +671,7 @@ fn main() {
             }
         }
         Commands::Deploy { command } => match command {
-            DeployCommands::List => deploy_list(opts.dev),
+            DeployCommands::List { state } => deploy_list(opts.dev, state),
             DeployCommands::Add { model, task } => deploy_add(&model, &task, opts.dev),
             DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
