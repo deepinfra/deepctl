@@ -393,7 +393,7 @@ fn get_host(dev: bool) -> String {
 }
 
 fn deploy_list(dev: bool) -> Result<()> {
-    let json = get_parsed_response("/deploy/list", Method::GET, dev, true)?;
+    let json = get_parsed_response("/deploy/list/", Method::GET, dev, true)?;
     println!("{}", serde_json::to_string_pretty(&json).unwrap());
     Ok(())
 }
