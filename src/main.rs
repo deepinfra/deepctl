@@ -414,7 +414,7 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> Result<()> {
     let params = HashMap::from([("model_name", model_name), ("task", task)]);
     let body = serde_json::to_string(&params)?;
 
-    let json = get_parsed_response_extra("/deploy/hf", Method::POST, dev, true, |rb| {
+    let json = get_parsed_response_extra("/deploy/hf/", Method::POST, dev, true, |rb| {
         rb.header("Content-type", "application/json").body(body)
     })?;
 
