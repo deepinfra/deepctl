@@ -19,6 +19,7 @@ use version_compare::Version;
 use webbrowser;
 use yaml_rust::Yaml;
 use yaml_rust::{YamlEmitter, YamlLoader};
+use base64;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -308,22 +309,24 @@ fn write_config(config: &str, dev: bool) -> Result<()> {
     Ok(())
 }
 
+fn get_di_dir() -> Result<std::path::PathBuf> {
+    Ok(dirs::home_dir()
+        .ok_or(DeepCtlError::BadEnv("home_dir"))?
+        .join(".deepinfra"))
+}
+
 fn get_config_path(dev: bool) -> Result<std::path::PathBuf> {
-    let cfg_path = dirs::home_dir()
-            .ok_or(DeepCtlError::BadEnv("home_dir"))?
-            .join(".deepinfra/");
-    let cfg_file = if dev {
-        "config_dev.yaml"
-    } else {
-        "config.yaml"
-    };
-    Ok(cfg_path.join(cfg_file))
+    Ok(get_di_dir()?
+        .join(".deepinfra/")
+        .join(if dev {
+            "config_dev.yaml"
+        } else {
+            "config.yaml"
+        }))
 }
 
 fn get_version_path() -> Result<std::path::PathBuf> {
-    Ok(dirs::home_dir().ok_or(DeepCtlError::BadEnv("home_dir"))?
-        .join(".deepinfra")
-        .join("version.yaml"))
+    Ok(get_di_dir()?.join("version.yaml"))
 }
 
 fn read_version_data() -> Result<VersionCheck> {
@@ -482,21 +485,144 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> Result<()> {
-    let mut form = multipart::Form::new();
-    for (key, value) in args {
-        if value.starts_with("@") {
-            form = form.file(key, &value[1..])?;
-        } else {
-            form = form.text(key, value);
+#[derive(Debug, PartialEq)]
+enum InferInputType {
+    INTEGER,
+    NUMBER,
+    TEXT,
+    BINARY
+}
+
+impl InferInputType {
+    fn from_str(inp: &str) -> Option<InferInputType> {
+        match inp {
+            "integer" => Some(Self::INTEGER),
+            "number" => Some(Self::NUMBER),
+            "string" => Some(Self::TEXT),
+            _ => None,
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+enum InferInputLocation {
+    PARAMS,
+    MULTIPART,
+}
+
+fn read_binary_file(name: &str) -> Result<Vec<u8>> {
+    let mut file = File::open(name)?;
+    let mut buf: Vec<u8> = Vec::new();
+    file.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+fn prase_base64(b64: &str) -> Result<Vec<u8>> {
+    Ok(base64::decode(b64)?)
+    // let mut reader = std::io::Cursor::new(b64);
+    // let mut decoder = base64::read::DecoderReader::from(
+    //     &mut reader,
+    //     &base64::engine::DEFAULT_ENGINE);
+
+    // // handle errors as you normally would
+    // let mut buf = Vec::new();
+    // decoder.read_to_end(&mut buf)?;
+    // Ok(buf)
+}
+
+fn encode_base64(b64_bytes: &Vec<u8>) -> String {
+    base64::encode(b64_bytes)
+}
+
+type InputMapping = HashMap<String, (InferInputType, InferInputLocation)>;
+fn infer_body(mapping: InputMapping, args: Vec<(String, String)>) -> Result<multipart::Form> {
+    eprintln!("mapping: {:?}", mapping);
+    let mut form = multipart::Form::new();
+    let mut params = serde_json::Map::new();
+    for (key, inp_value) in args {
+        let raw_value = if inp_value.starts_with("@") {
+            read_binary_file(&inp_value[1..])?
+        } else if inp_value.starts_with("base64:") {
+            prase_base64(&inp_value[7..])?
+        } else {
+            inp_value.as_bytes().to_vec()
+        };
+        
+        if let Some((typ, location)) = mapping.get(&key) {
+            match location {
+                InferInputLocation::PARAMS => {
+                    let parsed_value: serde_json::Value = match typ {
+                        InferInputType::INTEGER | InferInputType::NUMBER => serde_json::from_str(String::from_utf8(raw_value)?.trim())?,
+                        InferInputType::TEXT => serde_json::Value::String(String::from_utf8(raw_value)?),
+                        InferInputType::BINARY => serde_json::Value::String(encode_base64(&raw_value)),
+                    };
+                    params.insert(key, parsed_value);
+                },
+                InferInputLocation::MULTIPART => {
+                    let mut part = multipart::Part::bytes(raw_value);
+                    // If there is no filename, fastapi returns 422
+                    part = part.file_name("filename.ext");
+                    form = form.part(key, part);
+                }
+            }
+        };
+    }
+    if !params.is_empty() {
+        form = form.text("input", serde_json::to_string(&params)?);
+    }
+    Ok(form)
+}
+
+fn get_model_in_schema(dev: bool, model_name: &str) -> Result<serde_json::Value> {
+    let schema_cache = get_di_dir()?
+        .join("schemas")
+        .join(format!("{}.in.schema.json", model_name.replace("/", ":")));
+    if ! schema_cache.exists() {
+        let model_info = get_parsed_response(&format!("/models/{}", model_name), Method::GET, dev, false)?;
+        let in_schema = model_info.get("in_schema")
+            .ok_or(DeepCtlError::ApiMismatch("/models/NAME should contain in_schema"))?;
+        fs::create_dir_all(&schema_cache.parent().unwrap())?;
+        serde_json::to_writer(File::create(&schema_cache)?, in_schema)?;
+    }
+
+    let schema: serde_json::Value = serde_json::from_reader(File::open(&schema_cache)?)?;
+
+    Ok(schema.to_owned())
+}
+
+fn schema_to_mapping(schema: serde_json::Value) -> Result<InputMapping> {
+    let properties = schema.get("properties")
+        .ok_or(DeepCtlError::ApiMismatch("in_schema should have properties"))?
+        .as_object()
+        .ok_or(DeepCtlError::ApiMismatch("in_schema properties should be hash"))?; 
+    let mut res = InputMapping::new();
+    for (name, props) in properties {
+        let format = props.get("format").and_then(serde_json::Value::as_str);
+        if format == Some("binary") {
+            res.insert(name.to_owned(), (InferInputType::BINARY, InferInputLocation::MULTIPART));
+        } else {
+            let raw_inp_type = props.get("type")
+                .ok_or(DeepCtlError::ApiMismatch("schema property should have type"))?
+                .as_str()
+                .ok_or(DeepCtlError::ApiMismatch("schema property type should be string"))?;
+            let inp_type = InferInputType::from_str(raw_inp_type)
+                .ok_or(DeepCtlError::ApiMismatch("unhandled schema type"))
+                .context(format!("type {}", raw_inp_type))?;
+            res.insert(name.to_owned(), (inp_type, InferInputLocation::PARAMS));
+        }
+    }
+    Ok(res)
+}
+
+fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> Result<()> {
+    let schema: serde_json::Value = get_model_in_schema(dev, model_name)?;
+    let form = infer_body(schema_to_mapping(schema)?, args)?;
 
     let json = get_parsed_response_extra(
         &format!("/v1/inference/{}", model_name),
         Method::POST,
         dev,
-        true,
+        false,
         move |rb| {
             rb.timeout(std::time::Duration::from_secs(600))
                 .multipart(form)
