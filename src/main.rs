@@ -309,22 +309,24 @@ fn write_config(config: &str, dev: bool) -> Result<()> {
     Ok(())
 }
 
+fn get_di_dir() -> Result<std::path::PathBuf> {
+    Ok(dirs::home_dir()
+        .ok_or(DeepCtlError::BadEnv("home_dir"))?
+        .join(".deepinfra"))
+}
+
 fn get_config_path(dev: bool) -> Result<std::path::PathBuf> {
-    let cfg_path = dirs::home_dir()
-            .ok_or(DeepCtlError::BadEnv("home_dir"))?
-            .join(".deepinfra/");
-    let cfg_file = if dev {
-        "config_dev.yaml"
-    } else {
-        "config.yaml"
-    };
-    Ok(cfg_path.join(cfg_file))
+    Ok(get_di_dir()?
+        .join(".deepinfra/")
+        .join(if dev {
+            "config_dev.yaml"
+        } else {
+            "config.yaml"
+        }))
 }
 
 fn get_version_path() -> Result<std::path::PathBuf> {
-    Ok(dirs::home_dir().ok_or(DeepCtlError::BadEnv("home_dir"))?
-        .join(".deepinfra")
-        .join("version.yaml"))
+    Ok(get_di_dir()?.join("version.yaml"))
 }
 
 fn read_version_data() -> Result<VersionCheck> {
@@ -572,10 +574,20 @@ fn infer_body(mapping: InputMapping, args: Vec<(String, String)>) -> Result<mult
 }
 
 fn get_model_in_schema(dev: bool, model_name: &str) -> Result<serde_json::Value> {
-    let model_info = get_parsed_response(&format!("/models/{}", model_name), Method::GET, dev, false)?;
-    let in_schema = model_info.get("in_schema")
-        .ok_or(DeepCtlError::ApiMismatch("/models/NAME should contain in_schema"))?;
-    Ok(in_schema.to_owned())
+    let schema_cache = get_di_dir()?
+        .join("schemas")
+        .join(format!("{}.in.schema.json", model_name.replace("/", ":")));
+    if ! schema_cache.exists() {
+        let model_info = get_parsed_response(&format!("/models/{}", model_name), Method::GET, dev, false)?;
+        let in_schema = model_info.get("in_schema")
+            .ok_or(DeepCtlError::ApiMismatch("/models/NAME should contain in_schema"))?;
+        fs::create_dir_all(&schema_cache.parent().unwrap())?;
+        serde_json::to_writer(File::create(&schema_cache)?, in_schema)?;
+    }
+
+    let schema: serde_json::Value = serde_json::from_reader(File::open(&schema_cache)?)?;
+
+    Ok(schema.to_owned())
 }
 
 fn schema_to_mapping(schema: serde_json::Value) -> Result<InputMapping> {
@@ -603,14 +615,6 @@ fn schema_to_mapping(schema: serde_json::Value) -> Result<InputMapping> {
 }
 
 fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> Result<()> {
-    // let mut form = multipart::Form::new();
-    // for (key, value) in args {
-    //     if value.starts_with("@") {
-    //         form = form.file(key, &value[1..])?;
-    //     } else {
-    //         form = form.text(key, value);
-    //     }
-    // }
     let schema: serde_json::Value = get_model_in_schema(dev, model_name)?;
     let form = infer_body(schema_to_mapping(schema)?, args)?;
 
