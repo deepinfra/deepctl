@@ -39,6 +39,8 @@ pub enum DeepCtlError {
     BadEnv(&'static str),
     #[error("backend returned wrong/unexpected object")]
     ApiMismatch(&'static str),
+    #[error("something looks wrong on your end: {0}")]
+    BadInput(String),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -536,7 +538,6 @@ fn encode_base64(b64_bytes: &Vec<u8>) -> String {
 
 type InputMapping = HashMap<String, (InferInputType, InferInputLocation)>;
 fn infer_body(mapping: InputMapping, args: Vec<(String, String)>) -> Result<multipart::Form> {
-    eprintln!("mapping: {:?}", mapping);
     let mut form = multipart::Form::new();
     let mut params = serde_json::Map::new();
     for (key, inp_value) in args {
@@ -548,22 +549,22 @@ fn infer_body(mapping: InputMapping, args: Vec<(String, String)>) -> Result<mult
             inp_value.as_bytes().to_vec()
         };
         
-        if let Some((typ, location)) = mapping.get(&key) {
-            match location {
-                InferInputLocation::PARAMS => {
-                    let parsed_value: serde_json::Value = match typ {
-                        InferInputType::INTEGER | InferInputType::NUMBER => serde_json::from_str(String::from_utf8(raw_value)?.trim())?,
-                        InferInputType::TEXT => serde_json::Value::String(String::from_utf8(raw_value)?),
-                        InferInputType::BINARY => serde_json::Value::String(encode_base64(&raw_value)),
-                    };
-                    params.insert(key, parsed_value);
-                },
-                InferInputLocation::MULTIPART => {
-                    let mut part = multipart::Part::bytes(raw_value);
-                    // If there is no filename, fastapi returns 422
-                    part = part.file_name("filename.ext");
-                    form = form.part(key, part);
-                }
+        let (typ, location) = mapping.get(&key)
+            .ok_or(DeepCtlError::BadInput(format!("unexpected input argument `{}`", key)))?;
+        match location {
+            InferInputLocation::PARAMS => {
+                let parsed_value: serde_json::Value = match typ {
+                    InferInputType::INTEGER | InferInputType::NUMBER => serde_json::from_str(String::from_utf8(raw_value)?.trim())?,
+                    InferInputType::TEXT => serde_json::Value::String(String::from_utf8(raw_value)?),
+                    InferInputType::BINARY => serde_json::Value::String(encode_base64(&raw_value)),
+                };
+                params.insert(key, parsed_value);
+            },
+            InferInputLocation::MULTIPART => {
+                let mut part = multipart::Part::bytes(raw_value);
+                // If there is no filename, fastapi returns 422
+                part = part.file_name("filename.ext");
+                form = form.part(key, part);
             }
         };
     }
