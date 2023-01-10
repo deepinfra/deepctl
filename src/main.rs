@@ -37,8 +37,8 @@ pub enum DeepCtlError {
     BadConfig,
     #[error("Can't figure out {0} from environment")]
     BadEnv(&'static str),
-    #[error("backend returned wrong/unexpected object")]
-    ApiMismatch(&'static str),
+    #[error("backend returned wrong/unexpected object: {0}")]
+    ApiMismatch(String),
     #[error("something looks wrong on your end: {0}")]
     BadInput(String),
 }
@@ -89,6 +89,9 @@ enum Commands {
         /// inference arguments (eg. -i k=v -i k2=v2)
         #[arg(short('i'), value_parser = infer_args_parser)]
         args: Vec<(String, String)>,
+        /// inference output (eg. -i images=dir/image.{IDX}.{EXT})
+        #[arg(short('o'), value_parser = infer_out_parser)]
+        outputs: Vec<(String, String)>,
     },
     /// version command
     Version {
@@ -137,7 +140,7 @@ enum ModelCommands {
     /// get model info
     Info {
         /// model name
-        #[arg(short, long)]
+        #[arg(short('m'), long)]
         model: String,
     },
 }
@@ -436,7 +439,7 @@ fn deploy_list(dev: bool, state: DeployState) -> Result<()> {
     };
     let deploys: Vec<&serde_json::Value> = json.as_array()
         // .unwrap();
-        .ok_or(DeepCtlError::ApiMismatch("/delpoy/list/ result is not an array"))?
+        .ok_or(DeepCtlError::ApiMismatch("/delpoy/list/ result is not an array".into()))?
         .iter()
         .filter(|d| allowed_statuses.contains(&d["status"].as_str().unwrap()))
         .collect();
@@ -537,7 +540,7 @@ fn encode_base64(b64_bytes: &Vec<u8>) -> String {
 }
 
 type InputMapping = HashMap<String, (InferInputType, InferInputLocation)>;
-fn infer_body(mapping: InputMapping, args: Vec<(String, String)>) -> Result<multipart::Form> {
+fn infer_body(mapping: InputMapping, args: &Vec<(String, String)>) -> Result<multipart::Form> {
     let mut form = multipart::Form::new();
     let mut params = serde_json::Map::new();
     for (key, inp_value) in args {
@@ -548,8 +551,8 @@ fn infer_body(mapping: InputMapping, args: Vec<(String, String)>) -> Result<mult
         } else {
             inp_value.as_bytes().to_vec()
         };
-        
-        let (typ, location) = mapping.get(&key)
+
+        let (typ, location) = mapping.get(key)
             .ok_or(DeepCtlError::BadInput(format!("unexpected input argument `{}`", key)))?;
         match location {
             InferInputLocation::PARAMS => {
@@ -558,13 +561,13 @@ fn infer_body(mapping: InputMapping, args: Vec<(String, String)>) -> Result<mult
                     InferInputType::TEXT => serde_json::Value::String(String::from_utf8(raw_value)?),
                     InferInputType::BINARY => serde_json::Value::String(encode_base64(&raw_value)),
                 };
-                params.insert(key, parsed_value);
+                params.insert(key.into(), parsed_value);
             },
             InferInputLocation::MULTIPART => {
                 let mut part = multipart::Part::bytes(raw_value);
                 // If there is no filename, fastapi returns 422
                 part = part.file_name("filename.ext");
-                form = form.part(key, part);
+                form = form.part(key.to_owned(), part);
             }
         };
     }
@@ -581,9 +584,9 @@ fn get_model_in_schema(dev: bool, model_name: &str) -> Result<serde_json::Value>
     if ! schema_cache.exists() {
         let model_info = get_parsed_response(&format!("/models/{}", model_name), Method::GET, dev, false)?;
         let in_schema = model_info.get("in_schema")
-            .ok_or(DeepCtlError::ApiMismatch("/models/NAME should contain in_schema"))?;
+            .ok_or(DeepCtlError::ApiMismatch(format!("/models/{} should contain in_schema", model_name)))?;
         fs::create_dir_all(&schema_cache.parent().unwrap())?;
-        serde_json::to_writer(File::create(&schema_cache)?, in_schema)?;
+        serde_json::to_writer_pretty(File::create(&schema_cache)?, in_schema)?;
     }
 
     let schema: serde_json::Value = serde_json::from_reader(File::open(&schema_cache)?)?;
@@ -593,9 +596,9 @@ fn get_model_in_schema(dev: bool, model_name: &str) -> Result<serde_json::Value>
 
 fn schema_to_mapping(schema: serde_json::Value) -> Result<InputMapping> {
     let properties = schema.get("properties")
-        .ok_or(DeepCtlError::ApiMismatch("in_schema should have properties"))?
+        .ok_or(DeepCtlError::ApiMismatch("in_schema should have properties".into()))?
         .as_object()
-        .ok_or(DeepCtlError::ApiMismatch("in_schema properties should be hash"))?; 
+        .ok_or(DeepCtlError::ApiMismatch("in_schema properties should be hash".into()))?;
     let mut res = InputMapping::new();
     for (name, props) in properties {
         let format = props.get("format").and_then(serde_json::Value::as_str);
@@ -603,11 +606,11 @@ fn schema_to_mapping(schema: serde_json::Value) -> Result<InputMapping> {
             res.insert(name.to_owned(), (InferInputType::BINARY, InferInputLocation::MULTIPART));
         } else {
             let raw_inp_type = props.get("type")
-                .ok_or(DeepCtlError::ApiMismatch("schema property should have type"))?
+                .ok_or(DeepCtlError::ApiMismatch("schema property should have type".into()))?
                 .as_str()
-                .ok_or(DeepCtlError::ApiMismatch("schema property type should be string"))?;
+                .ok_or(DeepCtlError::ApiMismatch("schema property type should be string".into()))?;
             let inp_type = InferInputType::from_str(raw_inp_type)
-                .ok_or(DeepCtlError::ApiMismatch("unhandled schema type"))
+                .ok_or(DeepCtlError::ApiMismatch(format!("unhandled schema type {}", raw_inp_type)))
                 .context(format!("type {}", raw_inp_type))?;
             res.insert(name.to_owned(), (inp_type, InferInputLocation::PARAMS));
         }
@@ -615,7 +618,84 @@ fn schema_to_mapping(schema: serde_json::Value) -> Result<InputMapping> {
     Ok(res)
 }
 
-fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> Result<()> {
+fn infer_out_part(value: &serde_json::Value, location: &str) -> Result<()> {
+    use serde_json::Value;
+    let accepts_json = |loc: &str| loc.ends_with(".json") || loc.eq("-");
+    let json_type_str = |value: &Value| match value {
+        Value::Null => "null",
+        Value::Bool(_b) => "bool",
+        Value::Number(_n) => "number",
+        Value::String(_s) => "string",
+        Value::Array(_a) => "array",
+        Value::Object(_o) => "object",
+    };
+    fn mime_to_ext(mime: &str) -> Result<&'static str> {
+        match mime {
+            "image/png" => Ok("png"),
+            _ => Err(DeepCtlError::ApiMismatch(format!("unexpected mime type {}", mime)).into()),
+        }
+    }
+    fn create_file(location: &str) -> Result<std::fs::File> {
+        let path = std::path::PathBuf::from(location);
+        Ok(File::create(&path)
+            .with_context(|| format!("failed to create {:?}", &path))?)
+    }
+    fn store_json(value: &Value, location: &str) -> Result<()> {
+        if location != "-" {
+            serde_json::to_writer_pretty(create_file(location)?, value)?;
+        } else {
+            serde_json::to_writer_pretty(&mut std::io::stdout(), value)?;
+        };
+        Ok(())
+    }
+    fn store_blob(data: &[u8], location: &str) -> Result<()> {
+        create_file(location)?.write_all(data)?;
+        Ok(())
+    }
+    fn parse_data_url(data_url: &str) -> Option<(&str, Vec<u8>)> {
+        if data_url.starts_with("data:") {
+            if let Some(semi) = data_url.find(";") {
+                if data_url[semi+1..semi+8].eq("base64,") {
+                    if let Ok(data) = base64::decode(&data_url[semi+8..]) {
+                        return Some((&data_url[5..semi], data));
+                    }
+                    // TODO: If it looks like a data url, but doesn't decode we should probably raise an error
+                }
+            }
+        }
+        None
+    }
+
+    if let Value::Array(arr) = value {
+        if location.contains("{IDX}") {
+            for (idx, item) in arr.iter().enumerate() {
+                infer_out_part(item, &location.replace("{IDX}", &idx.to_string()))?;
+            }
+            Ok(())
+        } else if accepts_json(location) {
+            // dump the whole thing
+            store_json(value, location)
+        } else if arr.len() == 1 {
+            infer_out_part(arr.get(0).unwrap(), location)
+        } else {
+            Err(DeepCtlError::BadInput(format!("can't write arr(len={}) to {}", arr.len(), location)).into())
+        }
+    } else if let Value::String(str) = value {
+        if let Some((mime, data)) = parse_data_url(str) {
+            store_blob(&data, &location.replace("{EXT}", mime_to_ext(mime)?))
+        } else if accepts_json(location) {
+            store_json(value, location)
+        } else {
+            Err(DeepCtlError::BadInput(format!("can't write non-data-uri starting with {} string to {}", &str[..10], location)).into())
+        }
+    } else if accepts_json(location) {
+        store_json(value, location)
+    } else {
+        Err(DeepCtlError::BadInput(format!("can't write type {} to {}", json_type_str(value), location)).into())
+    }
+}
+
+fn infer(model_name: &str, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
     let schema: serde_json::Value = get_model_in_schema(dev, model_name)?;
     let form = infer_body(schema_to_mapping(schema)?, args)?;
 
@@ -630,7 +710,19 @@ fn infer(model_name: &str, args: Vec<(String, String)>, dev: bool) -> Result<()>
         },
     )?;
 
-    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    let outs_default = &vec![("".to_owned(), "-".to_owned())];
+    let outs = if outs.len() == 0 { outs_default } else { outs };
+    for (path, target) in outs {
+        let path_ptr = if path.is_empty() {
+            "".to_owned()
+        } else {
+            format!("/{}", path.replace(".", "/"))
+        };
+        infer_out_part(
+            json.pointer(&path_ptr)
+                .ok_or(DeepCtlError::BadInput(format!("can't index with _{}_", path)))?,
+            target)?;
+    }
     Ok(())
 }
 
@@ -643,6 +735,14 @@ fn infer_args_parser(s: &str) -> Result<(String, String), String> {
     let key = split.next().unwrap();
     let value = split.next().unwrap();
     Ok((key.to_string(), value.to_string()))
+}
+
+fn infer_out_parser(s: &str) -> Result<(String, String), String> {
+    if let Some(eq) = s.find('=') {
+        Ok((s[..eq].into(), s[eq+1..].into()))
+    } else {
+        Ok(("".into(), s.into()))
+    }
 }
 
 fn check_version_with_server(dev: bool) -> Result<VersionCheck> {
@@ -751,7 +851,7 @@ fn perform_update(dev: bool) -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let tmp_exe = {
         let mut tmp_exe_name = current_exe.as_os_str().to_owned();
-        tmp_exe_name.push(".tmp");    
+        tmp_exe_name.push(".tmp");
         std::path::PathBuf::from(tmp_exe_name)
     };
 
@@ -803,7 +903,7 @@ fn main() {
             DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
         },
-        Commands::Infer { model, args } => infer(&model, args, opts.dev),
+        Commands::Infer { model, args, outputs } => infer(&model, &args, &outputs, opts.dev),
         Commands::Model { command } => match command {
             ModelCommands::List => models_list(opts.dev),
             ModelCommands::Info { model } => model_info(&model, opts.dev),
