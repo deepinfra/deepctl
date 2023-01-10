@@ -203,7 +203,7 @@ fn get_response_extra<BM>(
 where
     BM: FnOnce(reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder,
 {
-    let client = get_http_client(dev);
+    let client = get_http_client(dev)?;
     let host = get_host(dev);
     let mut rb = client.request(method, format!("{}{}", host, path));
 
@@ -266,7 +266,9 @@ fn auth_login(dev: bool) -> Result<()> {
             false,
             |rb| rb.timeout(std::time::Duration::from_secs(300)),
         ).context("waiting for auth result from backend")?;
-        let token = json["access_token"].as_str().unwrap();
+        let token = json.get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or(DeepCtlError::ApiMismatch("login should return access_token".into()))?;
 
         let mut m = LinkedHashMap::new();
         m.insert(
@@ -276,10 +278,8 @@ fn auth_login(dev: bool) -> Result<()> {
         let yaml = Yaml::Hash(m);
         let mut out_str = String::new();
         let mut emitter = YamlEmitter::new(&mut out_str);
-        emitter.dump(&yaml).unwrap();
-        // file.write_all(out_str.as_bytes())?;
+        emitter.dump(&yaml).context("writing login token to file")?;
         write_config(&out_str, dev).context("storing login token")?;
-        // println!("access_token {}", get_access_token().unwrap());
         println!("login successful");
         Ok(())
     } else {
@@ -308,6 +308,7 @@ fn get_access_token(dev: bool) -> Result<String> {
 
 fn write_config(config: &str, dev: bool) -> Result<()> {
     let config_path = get_config_path(dev)?;
+    // config_path always has a parent
     fs::create_dir_all(&config_path.parent().unwrap())?;
     let mut file = File::create(config_path)?;
     file.write_all(config.as_bytes())?;
@@ -351,19 +352,17 @@ fn auth_logout(_dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn get_http_client(dev: bool) -> reqwest::blocking::Client {
-    let client = reqwest::blocking::Client::builder()
+fn get_http_client(dev: bool) -> Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
         .danger_accept_invalid_certs(dev)
-        .build()
-        .unwrap();
-    client
+        .build()?)
 }
 
 fn models_list(dev: bool) -> Result<()> {
     let json = get_parsed_response("/models/list", Method::GET, dev, true)?;
     let mut models = json
         .as_array()
-        .unwrap()
+        .ok_or(DeepCtlError::ApiMismatch("/models/list doesn't contain a models array".into()))?
         .iter()
         .map(|model| {
             let model_name = model["model_name"].as_str().unwrap();
@@ -383,31 +382,37 @@ fn models_list(dev: bool) -> Result<()> {
 fn model_info(model: &str, dev: bool) -> Result<()> {
     let json = get_parsed_response(&format!("/models/{}", model), Method::GET, dev, false)?;
 
+    fn get_str<'a>(json: &'a serde_json::Value, key: &str) -> Result<&'a str> {
+        json.get(key)
+            .and_then(|v| v.as_str())
+            .ok_or(DeepCtlError::ApiMismatch(format!("model info should contain {} of type string", key)).into())
+    }
+
     // println!("{:?}", json);
     println!("model: {}", model);
-    println!("type: {}", json["type"].as_str().unwrap());
-    if let Some(mask_token) = json["mask_token"].as_str() {
+    println!("type: {}", get_str(&json, "type")?);
+    if let Ok(mask_token) = get_str(&json, "mask_token") {
         println!("mask token: {}", mask_token);
     }
     println!(
         "CURL invocation:\n\n {}\n",
-        json["curl_inv"].as_str().unwrap()
+        get_str(&json, "curl_inv")?
     );
     println!(
         "deepctl invocation:\n\n {}\n",
-        json["cmdline_inv"].as_str().unwrap()
+        get_str(&json, "cmdline_inv")?
     );
     println!(
         "Field description:\n\n{}\n",
-        json["txt_docs"].as_str().unwrap()
+        get_str(&json, "txt_docs")?
     );
     println!(
         "output example:\n\n{}\n",
-        json["out_example"].as_str().unwrap()
+        get_str(&json, "out_example")?
     );
     println!(
         "output fields description:\n\n{}\n",
-        json["out_docs"].as_str().unwrap()
+        get_str(&json, "out_docs")?
     );
 
     Ok(())
@@ -438,18 +443,18 @@ fn deploy_list(dev: bool, state: DeployState) -> Result<()> {
         DeployState::DELETED => vec!["deleted"],
     };
     let deploys: Vec<&serde_json::Value> = json.as_array()
-        // .unwrap();
         .ok_or(DeepCtlError::ApiMismatch("/delpoy/list/ result is not an array".into()))?
         .iter()
         .filter(|d| allowed_statuses.contains(&d["status"].as_str().unwrap()))
         .collect();
+    // deploys was parsed from json and filtered, so it can't fail
     println!("{}", serde_json::to_string_pretty(&deploys).unwrap());
     Ok(())
 }
 
 fn deploy_info(deploy_id: &str, dev: bool) -> Result<()> {
     let json = get_parsed_response(&format!("/deploy/{}", deploy_id), Method::GET, dev, true)?;
-    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    println!("{}", serde_json::to_string_pretty(&json)?);
     Ok(())
 }
 
@@ -467,16 +472,20 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> Result<()> {
         rb.header("Content-type", "application/json").body(body)
     })?;
 
-    let deploy_id = json["deploy_id"].as_str().unwrap();
+    let deploy_id = json.get("deploy_id")
+        .and_then(|v| v.as_str())
+        .ok_or(DeepCtlError::ApiMismatch("delpoy model response should contain deploy_id".into()))?;
     println!("deployed {} {} -> {}", model_name, task, deploy_id);
     let mut last_status = String::new();
     loop {
         let tjson =
             get_parsed_response(&format!("/deploy/{}", &deploy_id), Method::GET, dev, true)?;
-        let status = tjson["status"].as_str().unwrap();
+        let status = tjson.get("status")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(DeepCtlError::ApiMismatch("deploy info response should contain status".into()))?;
         if status != last_status {
             // print the status replacing the last line
-            println!("status: {}", status);
+            eprintln!("status: {}", status);
             last_status = String::from(status);
         }
         if status == "initializing" || status == "deploying" {
@@ -484,7 +493,7 @@ fn deploy_add(model_name: &str, task: &str, dev: bool) -> Result<()> {
             continue;
         }
         // TODO: Non-zero exit status on failed (what about deleted, stopping)?
-        println!("\ndeployment {} --> {}", deploy_id, status);
+        println!("deployment {} --> {}", deploy_id, status);
         break;
     }
     Ok(())
@@ -585,6 +594,7 @@ fn get_model_in_schema(dev: bool, model_name: &str) -> Result<serde_json::Value>
         let model_info = get_parsed_response(&format!("/models/{}", model_name), Method::GET, dev, false)?;
         let in_schema = model_info.get("in_schema")
             .ok_or(DeepCtlError::ApiMismatch(format!("/models/{} should contain in_schema", model_name)))?;
+        // schema_cache is guaranteed to have a parent
         fs::create_dir_all(&schema_cache.parent().unwrap())?;
         serde_json::to_writer_pretty(File::create(&schema_cache)?, in_schema)?;
     }
@@ -727,14 +737,11 @@ fn infer(model_name: &str, args: &Vec<(String, String)>, outs: &Vec<(String, Str
 }
 
 fn infer_args_parser(s: &str) -> Result<(String, String), String> {
-    // check if s contains exactly one '='
-    let mut split = s.split('=');
-    if split.clone().count() != 2 {
-        return Err("Invalid argument format. Expected `key=value`".to_string());
+    if let Some(eq) = s.find('=') {
+        Ok((s[..eq].to_owned(), s[eq+1..].to_owned()))
+    } else {
+        Err("Invalid argument format. Expected key=value".into())
     }
-    let key = split.next().unwrap();
-    let value = split.next().unwrap();
-    Ok((key.to_string(), value.to_string()))
 }
 
 fn infer_out_parser(s: &str) -> Result<(String, String), String> {
@@ -753,14 +760,18 @@ fn check_version_with_server(dev: bool) -> Result<VersionCheck> {
         dev,
         false,
     )?;
-    let min_version_str = json["min"].as_str().unwrap();
-
-    let update_version_str = json["update"].as_str().unwrap();
-    let latest_version_str = json["latest"].as_str().unwrap();
+    fn get_str<'a>(json: &'a serde_json::Value, key: &str) -> Result<&'a str> {
+        json.get(key)
+            .and_then(serde_json::Value::as_str)
+            .ok_or(DeepCtlError::ApiMismatch(format!("version info should contain {} of type string", key)).into())
+    }
+    let min_version_str = get_str(&json, "min")?;
+    let update_version_str = get_str(&json, "update")?;
+    let latest_version_str = get_str(&json, "latest")?;
     let version_data = VersionCheck {
-        min: min_version_str.to_string(),
-        update: update_version_str.to_string(),
-        latest: latest_version_str.to_string(),
+        min: min_version_str.into(),
+        update: update_version_str.into(),
+        latest: latest_version_str.into(),
         last_check: now,
     };
 
@@ -792,10 +803,10 @@ fn prompt_update(reason: &str, latest: &str) {
     );
 
     let mut sudo_str = "sudo ";
-    if let Ok(exe) = std::env::current_exe() {
+    if let (Ok(exe), Some(home_dir)) = (std::env::current_exe(), dirs::home_dir()) {
         if exe
             .as_path()
-            .starts_with(dirs::home_dir().unwrap().as_path())
+            .starts_with(home_dir.as_path())
         {
             sudo_str = "";
         }
@@ -807,9 +818,14 @@ fn prompt_update(reason: &str, latest: &str) {
 }
 
 fn do_version_check(version_data: &VersionCheck, silent: bool) -> Result<()> {
-    let this_version = Version::from(VERSION).unwrap();
-    let min_version = Version::from(&version_data.min).unwrap();
-    let update_version = Version::from(&version_data.update).unwrap();
+    fn ver_from_str(s: &str) -> Result<Version> {
+        Ok(Version::from(s)
+            .ok_or(DeepCtlError::ApiMismatch(format!("version string {} doesn't parse", s)))?)
+    }
+
+    let this_version = ver_from_str(VERSION)?;
+    let min_version = ver_from_str(&version_data.min)?;
+    let update_version = ver_from_str(&version_data.update)?;
 
     if this_version < min_version {
         prompt_update("too old", &version_data.latest);
@@ -828,8 +844,7 @@ fn write_version_data(version_data: &VersionCheck) -> Result<()> {
     let version_path = get_version_path()?;
     fs::create_dir_all(&version_path.parent().unwrap())?;
     let mut version_file = File::create(&version_path)?;
-    let yaml = serde_yaml::to_string(&version_data).unwrap();
-    version_file.write_all(yaml.as_bytes())?;
+    serde_yaml::to_writer(&mut version_file, &version_data)?;
     Ok(())
 }
 
@@ -840,7 +855,7 @@ fn perform_update(dev: bool) -> Result<()> {
         "-linux"
     };
 
-    let client = get_http_client(dev);
+    let client = get_http_client(dev)?;
     let uri = format!("{}/deepctl{}", GITHUB_RELEASE_LATEST, suffix);
     let mut res = client
         .get(&uri)
@@ -881,7 +896,10 @@ fn main() {
 
     if !matches!(opts.command, Commands::Version { .. }) {
         // User didn't ask for a version check|update, we check anyway.
-        main_version_check(opts.dev, false).unwrap();
+        main_version_check(opts.dev, false).unwrap_or_else(|e| {
+            eprintln!("got an error when performing version check {:?}", e);
+            // Non fatal error
+        });
     }
 
     match opts.command {
