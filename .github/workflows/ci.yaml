@@ -14,11 +14,15 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
+      # Install static linking (musl) deps
+      - name: Install static link deps
+        run: sudo apt update && sudo apt install -y pkg-config musl-tools libssl-dev
+
       # Setup Rust, use the x86_64-apple-darwin target but the rest can be customized.
       - name: Setup Rust
         uses: ATiltedTree/setup-rust@v1
         with:
-          targets: x86_64-apple-darwin
+          targets: x86_64-apple-darwin x86_64-unknown-linux-musl
           rust-version: stable
 
       - name: Clone your Code
@@ -27,8 +31,8 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.2.0
 
-      - name: Build
-        run: cargo build
+      - name: Build for Linux
+        run: cargo build --release --target x86_64-unknown-linux-musl
 
 
   release:
@@ -40,11 +44,15 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
+      # Install static linking (musl) deps
+      - name: Install static link deps
+        run: sudo apt update && sudo apt install -y pkg-config musl-tools libssl-dev
+
       # Setup Rust, use the x86_64-apple-darwin target but the rest can be customized.
       - name: Setup Rust
         uses: ATiltedTree/setup-rust@v1
         with:
-          targets: x86_64-apple-darwin
+          targets: x86_64-apple-darwin x86_64-unknown-linux-musl
           rust-version: stable
 
       # Use the v1 of this action
@@ -70,7 +78,7 @@ jobs:
 
       # Build your code for apple-darwin based release
       - name: Build Your Code
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo build --release --target x86_64-unknown-linux-musl
 
       - name: Get secrets
         env:
@@ -111,7 +119,7 @@ jobs:
         run: |
           mkdir release
           cp target/x86_64-apple-darwin/release/deepctl release/deepctl-macos
-          cp target/x86_64-unknown-linux-gnu/release/deepctl release/deepctl-linux
+          cp target/x86_64-unknown-linux-musl/release/deepctl release/deepctl-linux
 
       - name: Release
         uses: softprops/action-gh-release@v1
