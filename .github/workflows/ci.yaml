@@ -77,11 +77,11 @@ jobs:
         run: cargo install apple-codesign
 
       # Build your code for apple-darwin based release
-      - name: Build Your Code
+      - name: Build for MacOSX
         run: cargo build --release --target x86_64-apple-darwin
 
       # Build your code for apple-darwin based release
-      - name: Build Your Code
+      - name: Build for Linux
         run: cargo build --release --target x86_64-unknown-linux-musl
 
       - name: Get secrets
