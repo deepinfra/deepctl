@@ -34,6 +34,10 @@ jobs:
       - name: Build for Linux
         run: cargo build --release --target x86_64-unknown-linux-musl
 
+      - uses: actions/upload-artifact@v3
+        with:
+          name: deepctl-linux
+          path: target/x86_64-unknown-linux-musl/release/deepctl
 
   release:
     name: Release
