@@ -308,7 +308,6 @@ fn get_di_dir() -> Result<std::path::PathBuf> {
 
 fn get_config_path(dev: bool) -> Result<std::path::PathBuf> {
     Ok(get_di_dir()?
-        .join(".deepinfra/")
         .join(if dev {
             "config_dev.yaml"
         } else {
