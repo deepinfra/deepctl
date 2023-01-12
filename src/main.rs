@@ -299,7 +299,7 @@ fn read_config(dev: bool) -> Result<String> {
 fn get_access_token(dev: bool) -> Result<String> {
     let config = read_config(dev)?;
     let docs = YamlLoader::load_from_str(&config)?;
-    let doc = &docs[0];
+    let doc = &docs.get(0).ok_or(DeepCtlError::BadConfig)?;
     let access_token = doc["access_token"]
         .as_str()
         .ok_or(DeepCtlError::BadConfig)?;
@@ -364,10 +364,14 @@ fn models_list(dev: bool) -> Result<()> {
         .as_array()
         .ok_or(DeepCtlError::ApiMismatch("/models/list doesn't contain a models array".into()))?
         .iter()
-        .map(|model| {
-            let model_name = model["model_name"].as_str().unwrap();
-            let m_type = model["type"].as_str().unwrap();
-            (m_type, model_name)
+        .filter_map(|model| {
+            if let (Some(m_type), Some(model_name)) = (
+                    model.get("type").and_then(|prop| prop.as_str()),
+                    model.get("model_name").and_then(|prop| prop.as_str())) {
+                Some((m_type, model_name))
+            } else {
+                None
+            }
         })
         .collect::<Vec<(&str, &str)>>();
 
@@ -445,7 +449,10 @@ fn deploy_list(dev: bool, state: DeployState) -> Result<()> {
     let deploys: Vec<&serde_json::Value> = json.as_array()
         .ok_or(DeepCtlError::ApiMismatch("/delpoy/list/ result is not an array".into()))?
         .iter()
-        .filter(|d| allowed_statuses.contains(&d["status"].as_str().unwrap()))
+        .filter(|d| {
+            let status = d.get("status").and_then(|s| s.as_str());
+            status.is_some() && allowed_statuses.contains(&status.unwrap())
+        })
         .collect();
     // deploys was parsed from json and filtered, so it can't fail
     println!("{}", serde_json::to_string_pretty(&deploys).unwrap());
