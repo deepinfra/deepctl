@@ -3,7 +3,6 @@ use chrono::serde::ts_seconds;
 use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use dirs;
-use linked_hash_map::LinkedHashMap;
 use reqwest::blocking::multipart;
 use reqwest::{self, Method};
 use serde::{Deserialize, Serialize};
@@ -17,8 +16,6 @@ use std::process::exit;
 use thiserror::Error;
 use version_compare::Version;
 use webbrowser;
-use yaml_rust::Yaml;
-use yaml_rust::{YamlEmitter, YamlLoader};
 use base64;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -250,6 +247,11 @@ fn get_parsed_response(
     get_parsed_response_extra(path, method, dev, auth, |rb| rb)
 }
 
+#[derive(Serialize, Deserialize)]
+struct ConfigData {
+    access_token: String
+}
+
 fn auth_login(dev: bool) -> Result<()> {
     println!("auth login");
     let login_id = random_string(32);
@@ -270,16 +272,7 @@ fn auth_login(dev: bool) -> Result<()> {
             .and_then(|v| v.as_str())
             .ok_or(DeepCtlError::ApiMismatch("login should return access_token".into()))?;
 
-        let mut m = LinkedHashMap::new();
-        m.insert(
-            Yaml::String("access_token".to_string()),
-            Yaml::String(token.to_string()),
-        );
-        let yaml = Yaml::Hash(m);
-        let mut out_str = String::new();
-        let mut emitter = YamlEmitter::new(&mut out_str);
-        emitter.dump(&yaml).context("writing login token to file")?;
-        write_config(&out_str, dev).context("storing login token")?;
+        write_config(&ConfigData { access_token: token.into() }, dev)?;
         println!("login successful");
         Ok(())
     } else {
@@ -288,30 +281,22 @@ fn auth_login(dev: bool) -> Result<()> {
     }
 }
 
-fn read_config(dev: bool) -> Result<String> {
+fn read_config(dev: bool) -> Result<ConfigData> {
     let config_path = get_config_path(dev)?;
-    let mut file = File::open(config_path)?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-    Ok(contents)
+    let file = File::open(config_path)?;
+    Ok(serde_yaml::from_reader(file)?)
 }
 
 fn get_access_token(dev: bool) -> Result<String> {
-    let config = read_config(dev)?;
-    let docs = YamlLoader::load_from_str(&config)?;
-    let doc = &docs.get(0).ok_or(DeepCtlError::BadConfig)?;
-    let access_token = doc["access_token"]
-        .as_str()
-        .ok_or(DeepCtlError::BadConfig)?;
-    Ok(access_token.to_string())
+    Ok(read_config(dev)?.access_token)
 }
 
-fn write_config(config: &str, dev: bool) -> Result<()> {
+fn write_config(config_data: &ConfigData, dev: bool) -> Result<()> {
     let config_path = get_config_path(dev)?;
     // config_path always has a parent
     fs::create_dir_all(&config_path.parent().unwrap())?;
-    let mut file = File::create(config_path)?;
-    file.write_all(config.as_bytes())?;
+    let file = File::create(config_path)?;
+    serde_yaml::to_writer(file, config_data)?;
     Ok(())
 }
 
