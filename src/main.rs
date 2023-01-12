@@ -1,6 +1,4 @@
 use anyhow::{Result, Context};
-use chrono::serde::ts_seconds;
-use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use dirs;
 use reqwest::blocking::multipart;
@@ -45,8 +43,7 @@ struct VersionData {
     min: String,
     update: String,
     latest: String,
-    #[serde(with = "ts_seconds")]
-    last_check: DateTime<Utc>,
+    last_check: i64
 }
 
 #[derive(Parser)]
@@ -741,7 +738,7 @@ fn infer_out_parser(s: &str) -> Result<(String, String), String> {
 }
 
 fn check_version_with_server(dev: bool) -> Result<VersionData> {
-    let now = Utc::now();
+    let now = unix_ts();
     let json = get_parsed_response(
         &format!("/cli/version?version={}", VERSION),
         Method::GET,
@@ -768,12 +765,24 @@ fn check_version_with_server(dev: bool) -> Result<VersionData> {
     Ok(version_data)
 }
 
+fn unix_ts() -> i64 {
+    use std::time::SystemTime;
+    let now = SystemTime::now();
+    if let Ok(unix_dur) = now.duration_since(SystemTime::UNIX_EPOCH) {
+        unix_dur.as_secs() as i64
+    } else if let Ok(unix_dur) = SystemTime::UNIX_EPOCH.duration_since(now) {
+        - (unix_dur.as_secs() as i64)
+    } else {
+        0
+    }
+}
+
 fn main_version_check(dev: bool, force: bool) -> Result<()> {
     let crnt_version_data: Option<VersionData> = read_version_data().ok();
+    let latest_acceptable = unix_ts() - VERSION_CHECK_SEC;
     let version_data = if crnt_version_data.is_none()
         || force
-        || crnt_version_data.as_ref().unwrap().last_check
-            < Utc::now() - Duration::seconds(VERSION_CHECK_SEC)
+        || crnt_version_data.as_ref().unwrap().last_check < latest_acceptable
     {
         println!("checking version with server...");
         check_version_with_server(dev)?
