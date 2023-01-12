@@ -321,11 +321,8 @@ fn get_version_path() -> Result<std::path::PathBuf> {
 
 fn read_version_data() -> Result<VersionCheck> {
     let config_path = get_version_path()?;
-    let mut file = File::open(&config_path)?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-
-    Ok(serde_yaml::from_str(&contents)?)
+    let file = File::open(&config_path)?;
+    Ok(serde_yaml::from_reader(file)?)
 }
 
 fn auth_logout(_dev: bool) -> Result<()> {
@@ -834,8 +831,8 @@ fn do_version_check(version_data: &VersionCheck, silent: bool) -> Result<()> {
 fn write_version_data(version_data: &VersionCheck) -> Result<()> {
     let version_path = get_version_path()?;
     fs::create_dir_all(&version_path.parent().unwrap())?;
-    let mut version_file = File::create(&version_path)?;
-    serde_yaml::to_writer(&mut version_file, &version_data)?;
+    let version_file = File::create(&version_path)?;
+    serde_yaml::to_writer(&version_file, &version_data)?;
     Ok(())
 }
 
