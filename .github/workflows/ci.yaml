@@ -25,6 +25,13 @@ jobs:
           targets: x86_64-apple-darwin x86_64-unknown-linux-musl
           rust-version: stable
 
+      # Use the v1 of this action
+      - name: Setup OSXCROSS
+        uses: mbround18/setup-osxcross@v1
+        # This builds executables & sets env variables for rust to consume.
+        with:
+          osx-version: "12.3"
+
       - name: Clone your Code
         uses: actions/checkout@v3
 
@@ -34,10 +41,18 @@ jobs:
       - name: Build for Linux
         run: cargo build --release --target x86_64-unknown-linux-musl
 
+      - name: Build for MacOSX
+        run: cargo build --release --target x86_64-apple-darwin
+
       - uses: actions/upload-artifact@v3
         with:
           name: deepctl-linux
           path: target/x86_64-unknown-linux-musl/release/deepctl
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: deepctl-macos
+          path: target/x86_64-apple-darwin/release/deepctl
 
   release:
     name: Release
