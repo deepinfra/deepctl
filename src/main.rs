@@ -41,7 +41,7 @@ pub enum DeepCtlError {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-struct VersionCheck {
+struct VersionData {
     min: String,
     update: String,
     latest: String,
@@ -319,7 +319,7 @@ fn get_version_path() -> Result<std::path::PathBuf> {
     Ok(get_di_dir()?.join("version.yaml"))
 }
 
-fn read_version_data() -> Result<VersionCheck> {
+fn read_version_data() -> Result<VersionData> {
     let config_path = get_version_path()?;
     let file = File::open(&config_path)?;
     Ok(serde_yaml::from_reader(file)?)
@@ -740,7 +740,7 @@ fn infer_out_parser(s: &str) -> Result<(String, String), String> {
     }
 }
 
-fn check_version_with_server(dev: bool) -> Result<VersionCheck> {
+fn check_version_with_server(dev: bool) -> Result<VersionData> {
     let now = Utc::now();
     let json = get_parsed_response(
         &format!("/cli/version?version={}", VERSION),
@@ -756,7 +756,7 @@ fn check_version_with_server(dev: bool) -> Result<VersionCheck> {
     let min_version_str = get_str(&json, "min")?;
     let update_version_str = get_str(&json, "update")?;
     let latest_version_str = get_str(&json, "latest")?;
-    let version_data = VersionCheck {
+    let version_data = VersionData {
         min: min_version_str.into(),
         update: update_version_str.into(),
         latest: latest_version_str.into(),
@@ -769,7 +769,7 @@ fn check_version_with_server(dev: bool) -> Result<VersionCheck> {
 }
 
 fn main_version_check(dev: bool, force: bool) -> Result<()> {
-    let crnt_version_data: Option<VersionCheck> = read_version_data().ok();
+    let crnt_version_data: Option<VersionData> = read_version_data().ok();
     let version_data = if crnt_version_data.is_none()
         || force
         || crnt_version_data.as_ref().unwrap().last_check
@@ -805,7 +805,7 @@ fn prompt_update(reason: &str, latest: &str) {
     );
 }
 
-fn do_version_check(version_data: &VersionCheck, silent: bool) -> Result<()> {
+fn do_version_check(version_data: &VersionData, silent: bool) -> Result<()> {
     fn ver_from_str(s: &str) -> Result<Version> {
         Ok(Version::from(s)
             .ok_or(DeepCtlError::ApiMismatch(format!("version string {} doesn't parse", s)))?)
@@ -828,7 +828,7 @@ fn do_version_check(version_data: &VersionCheck, silent: bool) -> Result<()> {
     Ok(())
 }
 
-fn write_version_data(version_data: &VersionCheck) -> Result<()> {
+fn write_version_data(version_data: &VersionData) -> Result<()> {
     let version_path = get_version_path()?;
     fs::create_dir_all(&version_path.parent().unwrap())?;
     let version_file = File::create(&version_path)?;
