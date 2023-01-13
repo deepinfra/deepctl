@@ -100,10 +100,8 @@ enum AuthCommands {
     Login,
     /// logout of Deep Infra
     Logout,
-    // /// signup for Deep Infra
-    // Signup,
-    // /// show the current user
-    // Whoami,
+    /// print the current API token
+    Token,
 }
 
 #[derive(Subcommand)]
@@ -327,6 +325,13 @@ fn auth_logout(_dev: bool) -> Result<()> {
     let config_path = get_config_path(_dev)?;
     fs::remove_file(config_path)?;
     println!("logout done");
+    Ok(())
+}
+
+fn auth_token(dev: bool) -> Result<()> {
+    let access_token = get_access_token(dev)
+        .map_err(DeepCtlError::NotLoggedIn)?;
+    println!("{}", access_token);
     Ok(())
 }
 
@@ -908,8 +913,7 @@ fn main() {
             match command {
                 AuthCommands::Login => auth_login(opts.dev),
                 AuthCommands::Logout => auth_logout(opts.dev),
-                // AuthCommands::Signup => println!("signup"),
-                // AuthCommands::Whoami => println!("whoami"),
+                AuthCommands::Token => auth_token(opts.dev),
             }
         }
         Commands::Deploy { command } => match command {
