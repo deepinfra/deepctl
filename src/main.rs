@@ -117,7 +117,7 @@ enum DeployCommands {
         #[arg(short, long)]
         model: String,
         #[arg(short, long)]
-        task: String,
+        task: Option<String>,
     },
     /// get information on a particular deployment
     Info { deploy_id: String },
@@ -454,8 +454,13 @@ fn deploy_delete(deploy_id: &str, dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn deploy_create(model_name: &str, task: &str, dev: bool) -> Result<()> {
-    let params = HashMap::from([("model_name", model_name), ("task", task)]);
+fn deploy_create(model_name: &str, task: Option<&str>, dev: bool) -> Result<()> {
+    let params = if let Some(task) = task {
+        HashMap::from([("model_name", model_name), ("task", task)])
+    } else {
+        // default task in the backend
+        HashMap::from([("model_name", model_name)])
+    };
     let body = serde_json::to_string(&params)?;
 
     let json = get_parsed_response_extra("/deploy/hf/", Method::POST, dev, true, |rb| {
@@ -465,7 +470,7 @@ fn deploy_create(model_name: &str, task: &str, dev: bool) -> Result<()> {
     let deploy_id = json.get("deploy_id")
         .and_then(|v| v.as_str())
         .ok_or(DeepCtlError::ApiMismatch("delpoy model response should contain deploy_id".into()))?;
-    println!("deployed {} {} -> {}", model_name, task, deploy_id);
+    println!("deployed {} {:?} -> {}", model_name, task, deploy_id);
     let mut last_status = String::new();
     loop {
         let tjson =
@@ -918,7 +923,7 @@ fn main() {
         }
         Commands::Deploy { command } => match command {
             DeployCommands::List { state } => deploy_list(opts.dev, state),
-            DeployCommands::Create { model, task } => deploy_create(&model, &task, opts.dev),
+            DeployCommands::Create { model, task } => deploy_create(&model, task.as_deref(), opts.dev),
             DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
         },
