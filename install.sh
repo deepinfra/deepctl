@@ -14,9 +14,7 @@ else
       target="macos"
       ;;
     "Darwin arm64")
-      target="macos-arm"
-      echo "MacOSX on arm is not supported at the moment, sorry" >&2
-      exit 1
+      target="macos"
       ;;
     *)
       target="linux"
