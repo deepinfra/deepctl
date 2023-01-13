@@ -115,7 +115,7 @@ enum DeployCommands {
         state: DeployState,
     },
     /// deploy a new model
-    Add {
+    Create {
         #[arg(short, long)]
         model: String,
         #[arg(short, long)]
@@ -449,7 +449,7 @@ fn deploy_delete(deploy_id: &str, dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn deploy_add(model_name: &str, task: &str, dev: bool) -> Result<()> {
+fn deploy_create(model_name: &str, task: &str, dev: bool) -> Result<()> {
     let params = HashMap::from([("model_name", model_name), ("task", task)]);
     let body = serde_json::to_string(&params)?;
 
@@ -914,7 +914,7 @@ fn main() {
         }
         Commands::Deploy { command } => match command {
             DeployCommands::List { state } => deploy_list(opts.dev, state),
-            DeployCommands::Add { model, task } => deploy_add(&model, &task, opts.dev),
+            DeployCommands::Create { model, task } => deploy_create(&model, &task, opts.dev),
             DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
         },
