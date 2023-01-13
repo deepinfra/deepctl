@@ -449,7 +449,7 @@ fn deploy_info(deploy_id: &str, dev: bool) -> Result<()> {
 }
 
 fn deploy_delete(deploy_id: &str, dev: bool) -> Result<()> {
-    get_response(&format!("/deply/{}", deploy_id), Method::DELETE, dev, true)?
+    get_response(&format!("/deploy/{}", deploy_id), Method::DELETE, dev, true)?
         .error_for_status()?;
     Ok(())
 }
