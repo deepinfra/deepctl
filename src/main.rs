@@ -114,15 +114,32 @@ enum DeployCommands {
     },
     /// deploy a new model
     Create {
+        /// The model name (e.g microsoft/resnet-50)
         #[arg(short, long)]
         model: String,
+        /// The model task (optional)
         #[arg(short, long)]
-        task: Option<String>,
+        task: Option<ModelTask>,
     },
     /// get information on a particular deployment
     Info { deploy_id: String },
     /// remove a deploymnet
     Delete { deploy_id: String },
+}
+
+#[derive(Serialize, Deserialize, ValueEnum, Eq, PartialEq, Clone, Debug)]
+#[serde(rename_all="kebab-case")]
+enum ModelTask {
+    AutomaticSpeechRecognition,
+    FillMask,
+    ImageClassification,
+    QuestionAnswering,
+    TextClassification,
+    TextGeneration,
+    TextToImage,
+    Text2textGeneration,
+    TokenClassification,
+    ZeroShotImageClassification,
 }
 
 #[derive(Subcommand)]
@@ -454,15 +471,15 @@ fn deploy_delete(deploy_id: &str, dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn deploy_create(model_name: &str, task: Option<&str>, dev: bool) -> Result<()> {
-    let params = if let Some(task) = task {
-        HashMap::from([("model_name", model_name), ("task", task)])
-    } else {
-        // default task in the backend
-        HashMap::from([("model_name", model_name)])
+fn deploy_create(model_name: &str, task: Option<&ModelTask>, dev: bool) -> Result<()> {
+    let body = {
+        let mut params = serde_json::Map::new();
+        params.insert("model_name".into(), model_name.into());
+        if let Some(task) = task {
+            params.insert("task".into(), serde_json::to_value(task).unwrap());
+        };
+        serde_json::to_string(&params)?
     };
-    let body = serde_json::to_string(&params)?;
-
     let json = get_parsed_response_extra("/deploy/hf/", Method::POST, dev, true, |rb| {
         rb.header("Content-type", "application/json").body(body)
     })?;
@@ -470,7 +487,7 @@ fn deploy_create(model_name: &str, task: Option<&str>, dev: bool) -> Result<()> 
     let deploy_id = json.get("deploy_id")
         .and_then(|v| v.as_str())
         .ok_or(DeepCtlError::ApiMismatch("delpoy model response should contain deploy_id".into()))?;
-    println!("deployed {} {:?} -> {}", model_name, task, deploy_id);
+    println!("deployed {} {:?} -> {}", model_name, &task, deploy_id);
     let mut last_status = String::new();
     loop {
         let tjson =
@@ -923,7 +940,7 @@ fn main() {
         }
         Commands::Deploy { command } => match command {
             DeployCommands::List { state } => deploy_list(opts.dev, state),
-            DeployCommands::Create { model, task } => deploy_create(&model, task.as_deref(), opts.dev),
+            DeployCommands::Create { model, task } => deploy_create(&model, task.as_ref(), opts.dev),
             DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
         },
