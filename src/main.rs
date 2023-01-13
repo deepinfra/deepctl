@@ -703,7 +703,7 @@ fn infer(model_name: &str, args: &Vec<(String, String)>, outs: &Vec<(String, Str
         &format!("/v1/inference/{}", model_name),
         Method::POST,
         dev,
-        false,
+        true,
         move |rb| {
             rb.timeout(std::time::Duration::from_secs(600))
                 .multipart(form)
