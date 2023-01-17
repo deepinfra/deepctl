@@ -549,17 +549,8 @@ fn read_binary_file(name: &str) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn prase_base64(b64: &str) -> Result<Vec<u8>> {
+fn parse_base64(b64: &str) -> Result<Vec<u8>> {
     Ok(base64::decode(b64)?)
-    // let mut reader = std::io::Cursor::new(b64);
-    // let mut decoder = base64::read::DecoderReader::from(
-    //     &mut reader,
-    //     &base64::engine::DEFAULT_ENGINE);
-
-    // // handle errors as you normally would
-    // let mut buf = Vec::new();
-    // decoder.read_to_end(&mut buf)?;
-    // Ok(buf)
 }
 
 fn encode_base64(b64_bytes: &Vec<u8>) -> String {
@@ -574,7 +565,7 @@ fn infer_body(mapping: InputMapping, args: &Vec<(String, String)>) -> Result<mul
         let raw_value = if inp_value.starts_with("@") {
             read_binary_file(&inp_value[1..])?
         } else if inp_value.starts_with("base64:") {
-            prase_base64(&inp_value[7..])?
+            parse_base64(&inp_value[7..])?
         } else {
             inp_value.as_bytes().to_vec()
         };
