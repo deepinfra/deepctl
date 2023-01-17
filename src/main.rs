@@ -506,6 +506,12 @@ fn deploy_create(model_name: &str, task: Option<&ModelTask>, dev: bool) -> Resul
         }
         // TODO: Non-zero exit status on failed (what about deleted, stopping)?
         println!("deployment {} --> {}", deploy_id, status);
+        if status == "failed" {
+            let error = tjson.get("fail_reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            eprintln!("error: {}", error);
+        }
         break;
     }
     Ok(())
