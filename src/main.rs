@@ -4,7 +4,6 @@ use dirs;
 use reqwest::blocking::multipart;
 use reqwest::{self, Method};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::fs::File;
@@ -517,31 +516,6 @@ fn deploy_create(model_name: &str, task: Option<&ModelTask>, dev: bool) -> Resul
     Ok(())
 }
 
-#[derive(Debug, PartialEq)]
-enum InferInputType {
-    INTEGER,
-    NUMBER,
-    TEXT,
-    BINARY
-}
-
-impl InferInputType {
-    fn from_str(inp: &str) -> Option<InferInputType> {
-        match inp {
-            "integer" => Some(Self::INTEGER),
-            "number" => Some(Self::NUMBER),
-            "string" => Some(Self::TEXT),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-enum InferInputLocation {
-    PARAMS,
-    MULTIPART,
-}
-
 fn read_binary_file(name: &str) -> Result<Vec<u8>> {
     let mut file = File::open(name)?;
     let mut buf: Vec<u8> = Vec::new();
@@ -553,14 +527,8 @@ fn parse_base64(b64: &str) -> Result<Vec<u8>> {
     Ok(base64::decode(b64)?)
 }
 
-fn encode_base64(b64_bytes: &Vec<u8>) -> String {
-    base64::encode(b64_bytes)
-}
-
-type InputMapping = HashMap<String, (InferInputType, InferInputLocation)>;
-fn infer_body(mapping: InputMapping, args: &Vec<(String, String)>) -> Result<multipart::Form> {
+fn infer_body(args: &Vec<(String, String)>) -> Result<multipart::Form> {
     let mut form = multipart::Form::new();
-    let mut params = serde_json::Map::new();
     for (key, inp_value) in args {
         let raw_value = if inp_value.starts_with("@") {
             read_binary_file(&inp_value[1..])?
@@ -570,71 +538,13 @@ fn infer_body(mapping: InputMapping, args: &Vec<(String, String)>) -> Result<mul
             inp_value.as_bytes().to_vec()
         };
 
-        let (typ, location) = mapping.get(key)
-            .ok_or(DeepCtlError::BadInput(format!("unexpected input argument `{}`", key)))?;
-        match location {
-            InferInputLocation::PARAMS => {
-                let parsed_value: serde_json::Value = match typ {
-                    InferInputType::INTEGER | InferInputType::NUMBER => serde_json::from_str(String::from_utf8(raw_value)?.trim())?,
-                    InferInputType::TEXT => serde_json::Value::String(String::from_utf8(raw_value)?),
-                    InferInputType::BINARY => serde_json::Value::String(encode_base64(&raw_value)),
-                };
-                params.insert(key.into(), parsed_value);
-            },
-            InferInputLocation::MULTIPART => {
-                let mut part = multipart::Part::bytes(raw_value);
-                // If there is no filename, fastapi returns 422
-                part = part.file_name("filename.ext");
-                form = form.part(key.to_owned(), part);
-            }
-        };
+        let mut part = multipart::Part::bytes(raw_value);
+        // the filename forces the backend to treat this data as binary
+        part = part.file_name("filename.ext");
+        form = form.part(key.to_owned(), part);
     }
-    if !params.is_empty() {
-        form = form.text("input", serde_json::to_string(&params)?);
-    }
+
     Ok(form)
-}
-
-fn get_model_in_schema(dev: bool, model_name: &str) -> Result<serde_json::Value> {
-    let schema_cache = get_di_dir()?
-        .join("schemas")
-        .join(format!("{}.in.schema.json", model_name.replace("/", ":")));
-    if ! schema_cache.exists() {
-        let model_info = get_parsed_response(&format!("/models/{}", model_name), Method::GET, dev, false)?;
-        let in_schema = model_info.get("in_schema")
-            .ok_or(DeepCtlError::ApiMismatch(format!("/models/{} should contain in_schema", model_name)))?;
-        // schema_cache is guaranteed to have a parent
-        fs::create_dir_all(&schema_cache.parent().unwrap())?;
-        serde_json::to_writer_pretty(File::create(&schema_cache)?, in_schema)?;
-    }
-
-    let schema: serde_json::Value = serde_json::from_reader(File::open(&schema_cache)?)?;
-
-    Ok(schema.to_owned())
-}
-
-fn schema_to_mapping(schema: serde_json::Value) -> Result<InputMapping> {
-    let properties = schema.get("properties")
-        .ok_or(DeepCtlError::ApiMismatch("in_schema should have properties".into()))?
-        .as_object()
-        .ok_or(DeepCtlError::ApiMismatch("in_schema properties should be hash".into()))?;
-    let mut res = InputMapping::new();
-    for (name, props) in properties {
-        let format = props.get("format").and_then(serde_json::Value::as_str);
-        if format == Some("binary") {
-            res.insert(name.to_owned(), (InferInputType::BINARY, InferInputLocation::MULTIPART));
-        } else {
-            let raw_inp_type = props.get("type")
-                .ok_or(DeepCtlError::ApiMismatch("schema property should have type".into()))?
-                .as_str()
-                .ok_or(DeepCtlError::ApiMismatch("schema property type should be string".into()))?;
-            let inp_type = InferInputType::from_str(raw_inp_type)
-                .ok_or(DeepCtlError::ApiMismatch(format!("unhandled schema type {}", raw_inp_type)))
-                .context(format!("type {}", raw_inp_type))?;
-            res.insert(name.to_owned(), (inp_type, InferInputLocation::PARAMS));
-        }
-    }
-    Ok(res)
 }
 
 fn infer_out_part(value: &serde_json::Value, location: &str) -> Result<()> {
@@ -715,8 +625,7 @@ fn infer_out_part(value: &serde_json::Value, location: &str) -> Result<()> {
 }
 
 fn infer(model_name: &str, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
-    let schema: serde_json::Value = get_model_in_schema(dev, model_name)?;
-    let form = infer_body(schema_to_mapping(schema)?, args)?;
+    let form = infer_body(args)?;
 
     let json = get_parsed_response_extra(
         &format!("/v1/inference/{}", model_name),
