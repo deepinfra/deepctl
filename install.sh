@@ -37,9 +37,11 @@ if [ "${DEEPCTL_INSTALL#$HOME}" != "$DEEPCTL_INSTALL" ]; then
     MAYSUDO="env --"
 else
     # assume everything outside $HOME requires sudo
-    echo -e "\nYou may be prompted for sudo password to write $EXE_TARGET" >&2
-    echo -e "To change the install folder you can set \$DEEPCTL_INSTALL:\n" >&2
-    echo -e "  curl https://deepinfra.com/get.sh | DEEPCTL_INSTALL=another/dir sh\n" >&2
+    echo
+    echo "You may be prompted for sudo password to write $EXE_TARGET"
+    echo "To change the install folder you can set \$DEEPCTL_INSTALL:"
+    echo "  curl https://deepinfra.com/get.sh | DEEPCTL_INSTALL=another/dir sh"
+    echo
     MAYSUDO="sudo"
 fi
 
