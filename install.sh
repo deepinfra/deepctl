@@ -22,10 +22,8 @@ else
   esac
 fi
 
-LATEST_REL_URI="https://github.com/deepinfra/deepctl/releases/latest/download"
-
 if [ $# -eq 0 ]; then
-  SOURCE_URI="$LATEST_REL_URI/deepctl-${target}"
+  SOURCE_URI="https://github.com/deepinfra/deepctl/releases/latest/download/deepctl-${target}"
 else
   SOURCE_URI="https://github.com/deepinfra/deepctl/releases/download/${1}/deepctl-${target}"
 fi
@@ -41,7 +39,7 @@ else
     # assume everything outside $HOME requires sudo
     echo -e "\nYou may be prompted for sudo password to write $EXE_TARGET" >&2
     echo -e "To change the install folder you can set \$DEEPCTL_INSTALL:\n" >&2
-    echo -e "  curl $LATEST_REL_URI/install.sh | DEEPCTL_INSTALL=another/dir bash\n" >&2
+    echo -e "  curl https://deepinfra.com/get.sh | DEEPCTL_INSTALL=another/dir bash\n" >&2
     MAYSUDO="sudo"
 fi
 
