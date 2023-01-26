@@ -138,6 +138,7 @@ enum ModelTask {
     AutomaticSpeechRecognition,
     FillMask,
     ImageClassification,
+    ObjectDetection,
     QuestionAnswering,
     TextClassification,
     TextGeneration,
