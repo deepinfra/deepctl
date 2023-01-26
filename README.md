@@ -16,7 +16,7 @@ You can also download deepctl from [Releases](https://github.com/deepinfra/deepc
 ## Usage
 
 #### Sign in
-You need a Github account to use deepctl
+You need a Github account to use deepctl.
 ```bash
 deepctl auth login
 ```
@@ -24,7 +24,6 @@ deepctl auth login
 ```bash
 deepctl auth token
 ```
-
 
 #### List supported models
 ```bash
@@ -37,11 +36,11 @@ deepctl deploy create -m openai/whisper-small
 ```
 
 #### Inference
-To get information about model, it's inference arguments, response fields and ways to call endpoint, use the following command
+To get information about model, it's inference arguments, response fields and ways to call endpoint, use the following command:
 ```bash
 deepctl deploy model info -m openai/whisper-small
 ```
-Output
+Output:
 ```
 model: openai/whisper-small
 type: automatic-speech-recognition
@@ -79,14 +78,14 @@ output fields description:
 
 text: string. the decoded speech
 ```
-When using HTTP inference api make sure to pass your AUTH_TOKEN header
+When using HTTP inference api make sure to pass your AUTH_TOKEN header.
 ```bash
 curl -X POST \
     -H "Authorization: bearer $AUTH_TOKEN"  \
     -F speech=@/path/to/hello_world.mp3  \
     'https://api.deepinfra.com/v1/inference/openai/whisper-small'
 ```
-Output
+Output:
 ```
 {"text":" Hello world"}
 ```
@@ -95,7 +94,7 @@ Output
 ```bash
 deepctl deploy list
 ```
-Output
+Output:
 ```
 [
   {
@@ -121,4 +120,10 @@ You can always use
 ```bash
 deepctl help
 ```
-to view more information on any command
+to view more information on any command.
+
+## Check version and update
+```bash
+deepctl version check
+deepctl version update
+```
