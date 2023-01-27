@@ -69,13 +69,7 @@ enum Commands {
     Deploy {
         /// deploys a model
         #[command(subcommand)]
-        command: Option<DeployCommands>,
-        /// upstream model name (in HF)
-        #[arg(short, long)]
-        model: Option<String>,
-        /// The model task (optional)
-        #[arg(short, long)]
-        task: Option<ModelTask>,
+        command: DeployCommands,
     },
     /// model commands
     Model {
@@ -444,7 +438,7 @@ fn get_host(dev: bool) -> String {
     host
 }
 
-fn deploy_list(dev: bool, state: &DeployState) -> Result<()> {
+fn deploy_list(dev: bool, state: DeployState) -> Result<()> {
     let json = get_parsed_response("/deploy/list/", Method::GET, dev, true)?;
     let allowed_statuses = match state {
         DeployState::ACTIVE => vec!["initializing", "deploying", "running"],
@@ -833,38 +827,6 @@ where
     None
 }
 
-fn execute_command(opts: &Cli) -> Result<()> {
-    match &opts.command {
-        Commands::Version { command } => match command {
-            VersionSubcommands::Check => main_version_check(opts.dev, true),
-            VersionSubcommands::Update => perform_update(opts.dev),
-        },
-        Commands::Auth { command } => {
-            match command {
-                AuthCommands::Login => auth_login(opts.dev),
-                AuthCommands::Logout => auth_logout(opts.dev),
-                AuthCommands::Token => auth_token(opts.dev),
-            }
-        }
-        Commands::Deploy { command, model, task } => match command {
-            Some(DeployCommands::List { state }) => deploy_list(opts.dev, state),
-            Some(DeployCommands::Create { model, ref task }) => deploy_create(model, task.as_ref(), opts.dev),
-            Some(DeployCommands::Info { deploy_id }) => deploy_info(deploy_id, opts.dev),
-            Some(DeployCommands::Delete { deploy_id }) => deploy_delete(deploy_id, opts.dev),
-            None => {
-                let model = model.as_ref()
-                    .ok_or(DeepCtlError::BadInput("-m|--model is mandatory when a sub-command is not given".into()))?;
-                deploy_create(model, task.as_ref(), opts.dev)
-            }
-        },
-        Commands::Infer { model, args, outputs } => infer(&model, &args, &outputs, opts.dev),
-        Commands::Model { command } => match command {
-            ModelCommands::List => models_list(opts.dev),
-            ModelCommands::Info { model } => model_info(&model, opts.dev),
-        },
-    }
-}
-
 fn main() {
     let opts = Cli::parse();
 
@@ -876,7 +838,31 @@ fn main() {
         });
     }
 
-    execute_command(&opts).unwrap_or_else(|e| {
+    match opts.command {
+        Commands::Version { command } => match command {
+            VersionSubcommands::Check => main_version_check(opts.dev, true),
+            VersionSubcommands::Update => perform_update(opts.dev),
+        },
+        Commands::Auth { command } => {
+            match command {
+                AuthCommands::Login => auth_login(opts.dev),
+                AuthCommands::Logout => auth_logout(opts.dev),
+                AuthCommands::Token => auth_token(opts.dev),
+            }
+        }
+        Commands::Deploy { command } => match command {
+            DeployCommands::List { state } => deploy_list(opts.dev, state),
+            DeployCommands::Create { model, task } => deploy_create(&model, task.as_ref(), opts.dev),
+            DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
+            DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
+        },
+        Commands::Infer { model, args, outputs } => infer(&model, &args, &outputs, opts.dev),
+        Commands::Model { command } => match command {
+            ModelCommands::List => models_list(opts.dev),
+            ModelCommands::Info { model } => model_info(&model, opts.dev),
+        },
+    }
+    .unwrap_or_else(|e| {
         if let Some(de) = find_in_chain::<DeepCtlError>(&e) {
             if matches!(de, DeepCtlError::NotLoggedIn(..)) {
                 eprintln!("Not logged in. Please call `deepctl auth login`");
