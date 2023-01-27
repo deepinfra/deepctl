@@ -17,9 +17,11 @@ use base64;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+const DEEPINFRA_LOGIN_HOST_PROD: &str = "https://deepinfra.com";
 const DEEPINFRA_HOST_PROD: &str = "https://api.deepinfra.com";
 const DEEPINFRA_HOST_DEV: &str = "https://localhost:7001";
-const LOGIN_PATH: &str = "/github/login";
+const LOGIN_PATH_PROD: &str = "/signup/";
+const LOGIN_PATH_DEV: &str = "/github/login";
 const VERSION_CHECK_SEC: i64 = 60 * 60 * 24 * 7; // 1 week
 const GITHUB_RELEASE_LATEST: &str = "https://github.com/deepinfra/deepctl/releases/latest/download";
 
@@ -273,8 +275,11 @@ struct ConfigData {
 fn auth_login(dev: bool) -> Result<()> {
     println!("auth login");
     let login_id = random_string(32);
-    let host = get_host(dev);
-    let login_url = format!("{}{}?login_id={}", host, LOGIN_PATH, login_id);
+    let (host, path) = match dev {
+        true => (DEEPINFRA_HOST_DEV, LOGIN_PATH_DEV),
+        false => (DEEPINFRA_LOGIN_HOST_PROD, LOGIN_PATH_PROD),
+    };
+    let login_url = format!("{}{}?login_id={}", host, path, login_id);
     println!("opening login url: {}", login_url);
     if webbrowser::open(&login_url).is_ok() {
         println!("opened login page");
