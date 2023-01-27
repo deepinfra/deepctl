@@ -107,12 +107,6 @@ enum AuthCommands {
 
 #[derive(Subcommand)]
 enum DeployCommands {
-    /// list deployed models
-    List {
-        /// show only deploys in given state
-        #[arg(long, value_enum, default_value_t=DeployState::ACTIVE)]
-        state: DeployState,
-    },
     /// deploy a new model
     Create {
         /// The model name (e.g microsoft/resnet-50)
@@ -121,6 +115,12 @@ enum DeployCommands {
         /// The model task (optional)
         #[arg(short, long)]
         task: Option<ModelTask>,
+    },
+    /// list deployed models
+    List {
+        /// show only deploys in given state
+        #[arg(long, value_enum, default_value_t=DeployState::ACTIVE)]
+        state: DeployState,
     },
     /// get information on a particular deployment
     Info { deploy_id: String },
