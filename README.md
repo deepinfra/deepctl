@@ -16,7 +16,7 @@ You can also download deepctl from [Releases](https://github.com/deepinfra/deepc
 ## Usage
 
 #### Sign in
-You need a Github account to use deepctl.
+You need a Github account to use deepctl. This command will open your Github Sign-on page in your browser. Follow instructions there.
 ```bash
 deepctl auth login
 ```
