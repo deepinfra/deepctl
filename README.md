@@ -38,7 +38,7 @@ deepctl deploy create -m openai/whisper-small
 #### Inference
 To get information about model, it's inference arguments, response fields and ways to call endpoint, use the following command:
 ```bash
-deepctl deploy model info -m openai/whisper-small
+deepctl model info -m openai/whisper-small
 ```
 Output:
 ```
