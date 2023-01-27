@@ -282,8 +282,8 @@ fn auth_login(dev: bool) -> Result<()> {
     let login_url = format!("{}{}?login_id={}", host, path, login_id);
     println!("opening login url: {}", login_url);
     if webbrowser::open(&login_url).is_ok() {
-        println!("opened login page");
-        println!("waiting for login to complete");
+        println!("Opened login page. Please follow instructions in your browser.");
+        println!("Waiting for login to complete");
         let json = get_parsed_response_extra(
             &format!("/github/cli/login?login_id={}", login_id),
             Method::GET,
