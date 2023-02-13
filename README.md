@@ -1,5 +1,5 @@
 # deepctl
-Command line tool for Deep Infra cloud ML inference service
+Command line tool for [Deep Infra cloud ML inference service](https://deepinfra.com/).
 
 ## Installation
 
