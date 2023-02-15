@@ -67,7 +67,14 @@ curl -X POST \
 ```
 Output:
 ```
-{"text":" Hello world"}
+{
+  "text": "Hello World",
+  "segments": [
+    ...
+  ],
+  "language": "en"
+}
+
 ```
 
 #### List your deployments
