@@ -132,14 +132,15 @@ enum DeployCommands {
 #[serde(rename_all="kebab-case")]
 enum ModelTask {
     AutomaticSpeechRecognition,
+    Embeddings,
     FillMask,
     ImageClassification,
     ObjectDetection,
     QuestionAnswering,
+    Text2textGeneration,
     TextClassification,
     TextGeneration,
     TextToImage,
-    Text2textGeneration,
     TokenClassification,
     ZeroShotImageClassification,
 }
