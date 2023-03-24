@@ -640,7 +640,7 @@ fn infer(model_name: &str, args: &Vec<(String, String)>, outs: &Vec<(String, Str
         dev,
         true,
         move |rb| {
-            rb.timeout(std::time::Duration::from_secs(600))
+            rb.timeout(std::time::Duration::from_secs(1800))
                 .multipart(form)
         },
     )?;
