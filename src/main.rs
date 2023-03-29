@@ -103,6 +103,10 @@ enum AuthCommands {
     Logout,
     /// print the current API token
     Token,
+    /// store the token manually
+    SetToken {
+        token: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -355,6 +359,11 @@ fn auth_token(dev: bool) -> Result<()> {
     let access_token = get_access_token(dev)
         .map_err(DeepCtlError::NotLoggedIn)?;
     println!("{}", access_token);
+    Ok(())
+}
+
+fn auth_set_token(token: &str, dev: bool) -> Result<()> {
+    write_config(&ConfigData { access_token: token.into() }, dev)?;
     Ok(())
 }
 
@@ -849,6 +858,7 @@ fn main() {
                 AuthCommands::Login => auth_login(opts.dev),
                 AuthCommands::Logout => auth_logout(opts.dev),
                 AuthCommands::Token => auth_token(opts.dev),
+                AuthCommands::SetToken { token } => auth_set_token(&token, opts.dev),
             }
         }
         Commands::Deploy { command } => match command {
