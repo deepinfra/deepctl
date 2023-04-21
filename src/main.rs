@@ -12,6 +12,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::exit;
 use thiserror::Error;
 use version_compare::Version;
+use chrono::{self, TimeZone};
 use webbrowser;
 use base64;
 
@@ -87,6 +88,11 @@ enum Commands {
         /// inference output (eg. -i images=dir/image.{IDX}.{EXT})
         #[arg(short('o'), value_parser = infer_out_parser)]
         outputs: Vec<(String, String)>,
+    },
+    /// Fetch inference logs
+    Log {
+        #[command(subcommand)]
+        command: LogCommands,
     },
     /// version command
     Version {
@@ -177,6 +183,33 @@ enum VersionSubcommands {
     Check,
     /// self update to latest version
     Update,
+}
+
+#[derive(Subcommand)]
+enum LogCommands {
+    Query {
+        deploy_id: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long, value_enum, default_value_t=LogDirection::FORWARD)]
+        direction: LogDirection,
+        #[arg(long, default_value_t=100)]
+        limit: i32,
+    },
+    Tail {
+        deploy_id: String,
+        #[arg(long, default_value="-15m")]
+        from: String,
+    }
+}
+
+#[derive(Serialize, Deserialize, ValueEnum, Eq, PartialEq, Clone, Debug)]
+#[serde(rename_all="kebab-case")]
+enum LogDirection {
+    FORWARD,
+    BACKWARD,
 }
 
 /// deploy state
@@ -726,6 +759,113 @@ fn unix_ts() -> i64 {
     }
 }
 
+#[derive(PartialEq, Debug)]
+enum FmtType {
+    HumanShort,
+    HumanLong,
+    HumanLongNs,
+    Unix,
+    UnixNs,
+}
+
+impl FmtType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            FmtType::HumanShort => "%F",
+            FmtType::HumanLong => "%FT%T",
+            FmtType::HumanLongNs => "%FT%T%.9f",
+            FmtType::Unix => "%s",
+            FmtType::UnixNs => "%s%.9f",
+        }
+    }
+
+    fn parse<T: chrono::offset::TimeZone>(&self, base: &T, s: &str) -> Option<chrono::DateTime<T>>  {
+        match self {
+            FmtType::HumanShort => {
+                let date = chrono::NaiveDate::parse_from_str(s, self.as_str()).ok();
+                let date_time = date.and_then(|d| d.and_hms_opt(0, 0, 0));
+                date_time.and_then(|dt| base.from_local_datetime(&dt).latest())
+            },
+            _ => base.datetime_from_str(s, self.as_str()).ok(),
+        }
+    }
+}
+
+fn ts_ns_to_human(ns: &str) -> Result<String> {
+    let dt = chrono::Local.datetime_from_str(ns, FmtType::UnixNs.as_str())?;
+    let df = dt.format(FmtType::HumanLongNs.as_str());
+    Ok(format!("{}", df))
+}
+
+fn ts_human_to_ns(human: &str) -> Option<String> {
+    for fmt_type in &[FmtType::HumanShort, FmtType::HumanLong, FmtType::HumanLongNs, FmtType::Unix, FmtType::UnixNs] {
+        match fmt_type.parse(&chrono::Local, human) {
+            Some(dt) => return Some(format!("{}", dt.format(FmtType::UnixNs.as_str()))),
+            None => (), //println!("failed to parse with {}", fmt_type.as_str()),
+        }
+    }
+    None
+}
+
+fn log_query_raw<F: Fn(&str, &str)>(dev: bool, deploy_id: &str, from: Option<String>, to: Option<String>, direction: LogDirection, limit: i32, iter: F) -> Result<()> {
+    let mut params: Vec<(String, String)> = vec![];
+    params.push(("deploy_id".into(), deploy_id.to_owned()));
+    if let Some(from) = from {
+        params.push(("from".into(), ts_human_to_ns(&from)
+            .ok_or(DeepCtlError::BadInput("bad from timstamp".to_owned()))?));
+    }
+    if let Some(to) = to {
+        params.push(("to".into(), ts_human_to_ns(&to)
+            .ok_or(DeepCtlError::BadInput("bad to timstamp".to_owned()))?));
+    }
+    params.push(("direction".into(), if direction == LogDirection::FORWARD { "forward".to_owned() } else { "backward".to_owned() }));
+    params.push(("limit".into(), format!("{}", limit)));
+
+    let url = reqwest::Url::parse_with_params("http://example.com/v1/logs/query", params.iter())?;
+    let path = reqwest::Url::parse("http://example.com")?.make_relative(&url).unwrap();
+    // println!("got path {}", &path);
+
+    let res = get_parsed_response(&format!("/{}", path), Method::GET, dev, true)?;
+
+    res.get("entries")
+            .ok_or(DeepCtlError::ApiMismatch("expected entries array".into()))?
+            .as_array()
+            .ok_or(DeepCtlError::ApiMismatch("expected entries array".into()))?
+            .iter()
+            .for_each(|item| {
+        let ts_line = item.as_array().unwrap();
+        let ts_raw = ts_line.get(0).unwrap().as_str().unwrap();
+        let line = ts_line.get(1).unwrap().as_str().unwrap();
+
+        iter(ts_raw, line);
+    });
+
+    Ok(())
+}
+
+fn log_query(dev: bool, deploy_id: String, from: Option<String>, to: Option<String>, direction: LogDirection, limit: i32) -> Result<()> {
+    log_query_raw(dev, &deploy_id, from, to, direction, limit, |ts, line| {
+        println!("{} {}", ts_ns_to_human(ts).unwrap(), line);
+    })
+}
+
+fn log_tail(dev: bool, deploy_id: String, from: String) -> Result<()> {
+    let last_ts = std::cell::RefCell::new("0".to_owned());
+    let visitor = |ts: &str, line: &str| {
+        if ts > last_ts.borrow().as_str() {
+            println!("{} {}", ts_ns_to_human(ts).unwrap(), line);
+            last_ts.replace(ts.to_owned());
+        }
+    };
+    log_query_raw(dev, &deploy_id, Some(from), None, LogDirection::FORWARD, 100, &visitor)?;
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+        let last_ts_copy = last_ts.borrow().clone();
+        log_query_raw(dev, &deploy_id, Some(last_ts_copy), None, LogDirection::FORWARD, 100, &visitor)?;
+    }
+}
+
 fn main_version_check(dev: bool, force: bool) -> Result<()> {
     let crnt_version_data: Option<VersionData> = read_version_data().ok();
     let latest_acceptable = unix_ts() - VERSION_CHECK_SEC;
@@ -872,6 +1012,10 @@ fn main() {
             ModelCommands::List => models_list(opts.dev),
             ModelCommands::Info { model } => model_info(&model, opts.dev),
         },
+        Commands::Log { command } => match command {
+            LogCommands::Query{ deploy_id, from, to, direction, limit} => log_query(opts.dev, deploy_id, from, to, direction, limit),
+            LogCommands::Tail { deploy_id, from } => log_tail(opts.dev, deploy_id, from),
+        }
     }
     .unwrap_or_else(|e| {
         if let Some(de) = find_in_chain::<DeepCtlError>(&e) {
