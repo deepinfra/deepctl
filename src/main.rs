@@ -27,6 +27,8 @@ const GITHUB_RELEASE_LATEST: &str = "https://github.com/deepinfra/deepctl/releas
 
 #[derive(Error, Debug)]
 pub enum DeepCtlError {
+    #[error("Error: {0}")]
+    Error(String),
     #[error("You need to log in first")]
     NotLoggedIn(#[from] anyhow::Error),
     #[error("Invalid configuration file")]
@@ -643,7 +645,7 @@ fn infer_out_part(value: &serde_json::Value, location: &str) -> Result<()> {
 fn infer(model_name: &str, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
     let form = infer_body(args)?;
 
-    let json = get_parsed_response_extra(
+    let response = get_response_extra(
         &format!("/v1/inference/{}", model_name),
         Method::POST,
         dev,
@@ -653,6 +655,15 @@ fn infer(model_name: &str, args: &Vec<(String, String)>, outs: &Vec<(String, Str
                 .multipart(form)
         },
     )?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_json: serde_json::Value = serde_json::from_str(&response.text()?)?;
+        let error_str = serde_json::to_string_pretty(&error_json)?;
+        return Err(DeepCtlError::Error(format!("{}: {}", status, error_str)).into());
+    }
+
+    let json: serde_json::Value = serde_json::from_str(&response.text()?)?;
 
     let outs_default = &vec![("".to_owned(), "-".to_owned())];
     let outs = if outs.len() == 0 { outs_default } else { outs };
