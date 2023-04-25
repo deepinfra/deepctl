@@ -189,29 +189,23 @@ enum VersionSubcommands {
 
 #[derive(Subcommand)]
 enum LogCommands {
+    /// Query the inference log for a particular deploy_id
     Query {
+        /// query logs for this deploy_id
         deploy_id: String,
+        /// from timestamp in YYYY-MM-DD, YYYY-MM-DD HH:MM:SS(.sss), or unix timestamp in fractional seconds (inclusive)
         #[arg(long)]
         from: Option<String>,
+        /// to   timestamp in YYYY-MM-DD, YYYY-MM-DD HH:MM:SS(.sss), or unix timestamp in fractional seconds (exclusive)
         #[arg(long)]
         to: Option<String>,
-        #[arg(long, value_enum, default_value_t=LogDirection::FORWARD)]
-        direction: LogDirection,
+        /// limit the number of returned log lines
         #[arg(long, default_value_t=100)]
         limit: i32,
+        /// print new log lines as they become available
+        #[arg(short, long, default_value_t=false)]
+        follow: bool,
     },
-    Tail {
-        deploy_id: String,
-        #[arg(long, default_value="-15m")]
-        from: String,
-    }
-}
-
-#[derive(Serialize, Deserialize, ValueEnum, Eq, PartialEq, Clone, Debug)]
-#[serde(rename_all="kebab-case")]
-enum LogDirection {
-    FORWARD,
-    BACKWARD,
 }
 
 /// deploy state
@@ -299,6 +293,19 @@ fn get_parsed_response(
     auth: bool,
 ) -> Result<serde_json::Value> {
     get_parsed_response_extra(path, method, dev, auth, |rb| rb)
+}
+
+fn build_path<I, K, V>(path: &str, params: I) -> Result<String>
+    where
+        I: IntoIterator,
+        I::Item: core::borrow::Borrow<(K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>
+{
+    const FAKE_HOST: &str = "http://example.com";
+    let url = reqwest::Url::parse_with_params(&format!("{}{}", FAKE_HOST, path), params)?;
+    let path = reqwest::Url::parse(FAKE_HOST)?.make_relative(&url).unwrap();
+    Ok(format!("/{}", path))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -783,10 +790,10 @@ impl FmtType {
     fn as_str(&self) -> &'static str {
         match self {
             FmtType::HumanShort => "%F",
-            FmtType::HumanLong => "%FT%T",
-            FmtType::HumanLongNs => "%FT%T%.9f",
+            FmtType::HumanLong => "%F %T",
+            FmtType::HumanLongNs => "%F %T%.3f",
             FmtType::Unix => "%s",
-            FmtType::UnixNs => "%s%.9f",
+            FmtType::UnixNs => "%s%.3f",
         }
     }
 
@@ -812,13 +819,13 @@ fn ts_human_to_ns(human: &str) -> Option<String> {
     for fmt_type in &[FmtType::HumanShort, FmtType::HumanLong, FmtType::HumanLongNs, FmtType::Unix, FmtType::UnixNs] {
         match fmt_type.parse(&chrono::Local, human) {
             Some(dt) => return Some(format!("{}", dt.format(FmtType::UnixNs.as_str()))),
-            None => (), //println!("failed to parse with {}", fmt_type.as_str()),
+            None => (), // eprintln!("failed to parse with {}", fmt_type.as_str()),
         }
     }
     None
 }
 
-fn log_query_raw<F: Fn(&str, &str)>(dev: bool, deploy_id: &str, from: Option<String>, to: Option<String>, direction: LogDirection, limit: i32, iter: F) -> Result<()> {
+fn log_query_raw<F: Fn(&str, &str)>(dev: bool, deploy_id: &str, from: Option<String>, to: Option<String>, limit: i32, iter: F) -> Result<()> {
     let mut params: Vec<(String, String)> = vec![];
     params.push(("deploy_id".into(), deploy_id.to_owned()));
     if let Some(from) = from {
@@ -829,14 +836,9 @@ fn log_query_raw<F: Fn(&str, &str)>(dev: bool, deploy_id: &str, from: Option<Str
         params.push(("to".into(), ts_human_to_ns(&to)
             .ok_or(DeepCtlError::BadInput("bad to timstamp".to_owned()))?));
     }
-    params.push(("direction".into(), if direction == LogDirection::FORWARD { "forward".to_owned() } else { "backward".to_owned() }));
     params.push(("limit".into(), format!("{}", limit)));
 
-    let url = reqwest::Url::parse_with_params("http://example.com/v1/logs/query", params.iter())?;
-    let path = reqwest::Url::parse("http://example.com")?.make_relative(&url).unwrap();
-    // println!("got path {}", &path);
-
-    let res = get_parsed_response(&format!("/{}", path), Method::GET, dev, true)?;
+    let res = get_parsed_response(&build_path("/v1/logs/query", params.iter())?, Method::GET, dev, true)?;
 
     res.get("entries")
             .ok_or(DeepCtlError::ApiMismatch("expected entries array".into()))?
@@ -854,26 +856,35 @@ fn log_query_raw<F: Fn(&str, &str)>(dev: bool, deploy_id: &str, from: Option<Str
     Ok(())
 }
 
-fn log_query(dev: bool, deploy_id: String, from: Option<String>, to: Option<String>, direction: LogDirection, limit: i32) -> Result<()> {
-    log_query_raw(dev, &deploy_id, from, to, direction, limit, |ts, line| {
-        println!("{} {}", ts_ns_to_human(ts).unwrap(), line);
-    })
+fn log_query(dev: bool, deploy_id: String, from: Option<String>, to: Option<String>, limit: i32, follow: bool) -> Result<()> {
+    if !follow {
+        log_query_raw(dev, &deploy_id, from, to, limit, |ts, line| {
+            println!("{} {}", ts_ns_to_human(ts).unwrap(), line);
+        })
+    } else {
+        if from.is_some() || to.is_some() {
+            return Err(DeepCtlError::BadInput("-f/--follow is incompatible with --from/--to".into()).into());
+        }
+        log_tail(dev, deploy_id, limit)
+    }
 }
 
-fn log_tail(dev: bool, deploy_id: String, from: String) -> Result<()> {
+fn log_tail(dev: bool, deploy_id: String, limit: i32) -> Result<()> {
     let last_ts = std::cell::RefCell::new("0".to_owned());
     let visitor = |ts: &str, line: &str| {
+        // avoid repeated lines (we always get the last line because from == last_ts)
         if ts > last_ts.borrow().as_str() {
             println!("{} {}", ts_ns_to_human(ts).unwrap(), line);
             last_ts.replace(ts.to_owned());
         }
     };
-    log_query_raw(dev, &deploy_id, Some(from), None, LogDirection::FORWARD, 100, &visitor)?;
+    log_query_raw(dev, &deploy_id, None, None, limit, &visitor)?;
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(2000));
         let last_ts_copy = last_ts.borrow().clone();
-        log_query_raw(dev, &deploy_id, Some(last_ts_copy), None, LogDirection::FORWARD, 100, &visitor)?;
+        // in case of very intensive logs 100 might not be enough for every 2s (i.e we'd start lagging behind), so honor the passed limit if larger
+        log_query_raw(dev, &deploy_id, Some(last_ts_copy), None, std::cmp::max(limit, 100), &visitor)?;
     }
 }
 
@@ -1024,8 +1035,7 @@ fn main() {
             ModelCommands::Info { model } => model_info(&model, opts.dev),
         },
         Commands::Log { command } => match command {
-            LogCommands::Query{ deploy_id, from, to, direction, limit} => log_query(opts.dev, deploy_id, from, to, direction, limit),
-            LogCommands::Tail { deploy_id, from } => log_tail(opts.dev, deploy_id, from),
+            LogCommands::Query{ deploy_id, from, to, limit, follow} => log_query(opts.dev, deploy_id, from, to, limit, follow),
         }
     }
     .unwrap_or_else(|e| {
