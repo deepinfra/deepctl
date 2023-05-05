@@ -20,7 +20,8 @@ You need a Github account to use deepctl. This command will open your Github Sig
 ```bash
 deepctl auth login
 ```
-#### View your Deep Infra API auth token to use it in your applications
+#### Auth token
+You can view your Deep Infra API auth token to use it in your applications using the following command or in the [dashboard](https://deepinfra.com/dash/api_keys).
 ```bash
 deepctl auth token
 ```
@@ -94,6 +95,12 @@ Output:
     "updated_at": "2023-01-26T19:33:23"
   }
 ]
+```
+
+#### Monitor Logs
+Use deploy_id from the output above.
+```bash
+deepctl log query -f DpM4BkrjEspUwmTa
 ```
 
 #### Delete deployment
