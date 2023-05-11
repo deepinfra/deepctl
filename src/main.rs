@@ -91,6 +91,16 @@ enum Commands {
         #[arg(short('o'), value_parser = infer_out_parser)]
         outputs: Vec<(String, String)>,
     },
+    /// Push a local docker image to deepinfra registry for custom inference
+    Push {
+        /// an existing local image name to be pushed
+        source_image: String,
+        /// an optional remote image name (it would be inferred otherwise)
+        target_image: Option<String>,
+        /// assume yes
+        #[arg(short('y'), default_value_t=false)]
+        assume_yes: bool,
+    },
     /// Fetch inference logs
     Log {
         #[command(subcommand)]
@@ -405,16 +415,8 @@ fn auth_token(dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn auth_docker_login(token: &str, dev: bool, user_provided: bool) -> Result<()> {
-    let profile = get_parsed_response("/v1/me", Method::GET, dev, true)
-    .with_context(|| {
-        let reason = if user_provided { ": is the token correct" } else { "" };
-        format!("failed to fetch profile{}", reason)
-    })?;
-    let display_name = profile.get("display_name")
-        .and_then(|dn| dn.as_str())
-        .ok_or(DeepCtlError::ApiMismatch("/v1/me doesn't contain display_name".into()))?;
-    Ok(deepctl::docker::login(display_name, token, deepctl::docker::DEEPINFRA_REGISTRY)?)
+fn auth_docker_login(token: &str, dev: bool, _user_provided: bool) -> Result<()> {
+    Ok(deepctl::docker::login(&get_display_name(dev)?, token, deepctl::docker::DEEPINFRA_REGISTRY)?)
 }
 
 fn auth_set_token(token: &str, dev: bool, user_provided: bool) -> Result<()> {
@@ -712,6 +714,48 @@ fn infer_out_part(value: &serde_json::Value, location: &str) -> Result<()> {
         store_json(value, location)
     } else {
         Err(DeepCtlError::BadInput(format!("can't write type {} to {}", json_type_str(value), location)).into())
+    }
+}
+
+fn get_display_name(dev: bool) -> Result<String> {
+    let profile = get_parsed_response("/v1/me", Method::GET, dev, true)
+        .with_context(|| format!("failed to fetch profile"))?;
+    Ok(profile.get("display_name")
+        .and_then(|dn| dn.as_str())
+        .ok_or(DeepCtlError::ApiMismatch("/v1/me doesn't contain display_name".into()))?
+        .to_owned())
+}
+
+fn prompt(msg: &str) -> Result<String> {
+    eprint!("{}", msg);
+    let mut buffer = String::new();
+    let stdin = std::io::stdin();
+    stdin.read_line(&mut buffer)?;
+    Ok(buffer.trim().to_owned())
+}
+
+fn push(source_image: &str, target_image: Option<&str>, assume_yes: bool, dev: bool) -> Result<()> {
+    let display_name = get_display_name(dev)?;
+    // if the source is already properly tagged, and there is no target provided, just use the source as-is
+    let target_image = if source_image.starts_with(deepctl::docker::DEEPINFRA_REGISTRY) && target_image == None {
+        Some(source_image)
+    } else {
+        target_image
+    };
+    if let Some(full_target_image) = deepctl::docker::suggest_remote_name(
+            source_image, target_image,
+            deepctl::docker::DEEPINFRA_REGISTRY, &display_name) {
+        if target_image.map(|ti| ti == full_target_image) != Some(true) && !assume_yes {
+            let response = prompt(&format!("Pushing {} to {}. [Yn]: ", source_image, full_target_image))?;
+            if !(response == "" || response.to_lowercase() == "y") {
+                return Ok(());
+            }
+        }
+        deepctl::docker::tag(source_image, &full_target_image)?;
+        deepctl::docker::push(&full_target_image)?;
+        Ok(())
+    } else {
+        Err(DeepCtlError::BadInput("bad TARGET_IMAGE".to_owned()).into())
     }
 }
 
@@ -1062,6 +1106,7 @@ fn main() {
             DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
         },
+        Commands::Push { source_image, target_image, assume_yes } => push(&source_image, target_image.as_deref(), assume_yes, opts.dev),
         Commands::Infer { model, args, outputs } => infer(&model, &args, &outputs, opts.dev),
         Commands::Model { command } => match command {
             ModelCommands::List => models_list(opts.dev),
