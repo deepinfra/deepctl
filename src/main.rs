@@ -414,7 +414,7 @@ fn auth_docker_login(token: &str, dev: bool, user_provided: bool) -> Result<()> 
     let display_name = profile.get("display_name")
         .and_then(|dn| dn.as_str())
         .ok_or(DeepCtlError::ApiMismatch("/v1/me doesn't contain display_name".into()))?;
-    Ok(deepctl::docker::store_creds(display_name, token)?)
+    Ok(deepctl::docker::login(display_name, token, deepctl::docker::DEEPINFRA_REGISTRY)?)
 }
 
 fn auth_set_token(token: &str, dev: bool, user_provided: bool) -> Result<()> {
