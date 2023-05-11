@@ -336,7 +336,8 @@ fn auth_login(dev: bool) -> Result<()> {
             .and_then(|v| v.as_str())
             .ok_or(DeepCtlError::ApiMismatch("login should return access_token".into()))?;
 
-        write_config(&ConfigData { access_token: token.into() }, dev)?;
+        auth_set_token(token, dev, false)?;
+        // write_config(&ConfigData { access_token: token.into() }, dev)?;
         println!("login successful");
         Ok(())
     } else {
@@ -404,9 +405,24 @@ fn auth_token(dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn auth_set_token(token: &str, dev: bool) -> Result<()> {
+fn auth_docker_login(token: &str, dev: bool, user_provided: bool) -> Result<()> {
+    let profile = get_parsed_response("/v1/me", Method::GET, dev, true)
+    .with_context(|| {
+        let reason = if user_provided { ": is the token correct" } else { "" };
+        format!("failed to fetch profile{}", reason)
+    })?;
+    let display_name = profile.get("display_name")
+        .and_then(|dn| dn.as_str())
+        .ok_or(DeepCtlError::ApiMismatch("/v1/me doesn't contain display_name".into()))?;
+    Ok(deepctl::docker::store_creds(display_name, token)?)
+}
+
+fn auth_set_token(token: &str, dev: bool, user_provided: bool) -> Result<()> {
     write_config(&ConfigData { access_token: token.into() }, dev)?;
-    Ok(())
+    auth_docker_login(token, dev, user_provided).or_else(|e| {
+        eprintln!("Failed to store docker credentials. `deepctl push` would likely not work: {:?}", e);
+        Ok(())
+    })
 }
 
 fn get_http_client(dev: bool) -> Result<reqwest::blocking::Client> {
@@ -1037,7 +1053,7 @@ fn main() {
                 AuthCommands::Login => auth_login(opts.dev),
                 AuthCommands::Logout => auth_logout(opts.dev),
                 AuthCommands::Token => auth_token(opts.dev),
-                AuthCommands::SetToken { token } => auth_set_token(&token, opts.dev),
+                AuthCommands::SetToken { token } => auth_set_token(&token, opts.dev, true),
             }
         }
         Commands::Deploy { command } => match command {
