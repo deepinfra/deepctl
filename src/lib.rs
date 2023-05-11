@@ -68,7 +68,7 @@ pub mod docker {
 
     fn sanitize_name(raw: &str) -> String {
         // This only sanitizes uppercase letters
-        // There are other issues
+        // There could be other issues
         raw.to_lowercase()
     }
 
@@ -80,6 +80,10 @@ pub mod docker {
                 let (comps, _tag) = deconstruct_name(remote_name);
                 if let Some(&first) = comps.first() {
                     if first == registry {
+                        if comps.get(1).map(|&v| v) != Some(&user) {
+                            // The user component is not correct
+                            return None;
+                        }
                         Some(remote_name.to_owned())
                     } else if first == user {
                         Some(format!("{}/{}", registry, remote_name))
