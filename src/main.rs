@@ -170,10 +170,22 @@ enum ModelTask {
     ZeroShotImageClassification,
 }
 
+#[derive(Serialize, Deserialize, ValueEnum, Eq, PartialEq, Clone, Debug)]
+#[serde(rename_all="kebab-case")]
+enum ModelVisibility {
+    Private,
+    Public,
+    Auto,
+    All,
+}
+
 #[derive(Subcommand)]
 enum ModelCommands {
     /// list models
-    List,
+    List {
+        #[arg(long, default_value="auto")]
+        visibility: ModelVisibility,
+    },
     /// get model info
     Info {
         /// model name
@@ -436,8 +448,9 @@ fn get_http_client(dev: bool) -> Result<reqwest::blocking::Client> {
         .build()?)
 }
 
-fn models_list(dev: bool) -> Result<()> {
-    let json = get_parsed_response("/models/list", Method::GET, dev, true)?;
+fn _model_list_api(public: bool, dev: bool) -> Result<Vec<(String, String)>> {
+    let path = if public { "/models/list" } else { "/models/private/list" };
+    let json = get_parsed_response(path, Method::GET, dev, true)?;
     let mut models = json
         .as_array()
         .ok_or(DeepCtlError::ApiMismatch("/models/list doesn't contain a models array".into()))?
@@ -446,12 +459,36 @@ fn models_list(dev: bool) -> Result<()> {
             if let (Some(m_type), Some(model_name)) = (
                     model.get("type").and_then(|prop| prop.as_str()),
                     model.get("model_name").and_then(|prop| prop.as_str())) {
-                Some((m_type, model_name))
+                Some((m_type.to_owned(), model_name.to_owned()))
             } else {
                 None
             }
         })
-        .collect::<Vec<(&str, &str)>>();
+        .collect::<Vec<(String, String)>>();
+
+    models.sort();
+
+    Ok(models)
+}
+
+fn models_list(visibility: ModelVisibility, dev: bool) -> Result<()> {
+    let mut models = match visibility {
+        ModelVisibility::Private => _model_list_api(false, dev)?,
+        ModelVisibility::Public => _model_list_api(true, dev)?,
+        ModelVisibility::Auto => {
+            let private = _model_list_api(false, dev)?;
+            if private.is_empty() {
+                _model_list_api(true, dev)?
+            } else {
+                private
+            }
+        },
+        ModelVisibility::All => {
+            let mut all = _model_list_api(false, dev)?;
+            all.append(&mut _model_list_api(true, dev)?);
+            all
+        },
+    };
 
     models.sort();
 
@@ -1128,7 +1165,7 @@ fn main() {
             outputs
         } => infer(model.as_deref(), deploy_id.as_deref(), &args, &outputs, opts.dev),
         Commands::Model { command } => match command {
-            ModelCommands::List => models_list(opts.dev),
+            ModelCommands::List { visibility } => models_list(visibility, opts.dev),
             ModelCommands::Info { model } => model_info(&model, opts.dev),
         },
         Commands::Log { command } => match command {
