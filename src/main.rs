@@ -83,7 +83,10 @@ enum Commands {
     Infer {
         /// model name
         #[arg(short, long)]
-        model: String,
+        model: Option<String>,
+        /// deploy_id
+        #[arg(short, long)]
+        deploy_id: Option<String>,
         /// inference arguments (eg. -i k=v -i k2=v2)
         #[arg(short('i'), value_parser = infer_args_parser)]
         args: Vec<(String, String)>,
@@ -759,11 +762,22 @@ fn push(source_image: &str, target_image: Option<&str>, assume_yes: bool, dev: b
     }
 }
 
-fn infer(model_name: &str, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
+fn infer(model_name: Option<&str>, deploy_id: Option<&str>, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
     let form = infer_body(args)?;
 
+    if (model_name.is_some() as i32) + (deploy_id.is_some() as i32) != 1 {
+        return Err(DeepCtlError::BadInput(
+            "exactly ONE of --model-name or --deploy-id is required for inference".to_owned()).into());
+    }
+
+    let path = if model_name.is_some() {
+        format!("/v1/inference/{}", model_name.unwrap())
+    } else {
+        format!("/v1/inference/deploy/{}", deploy_id.unwrap())
+    };
+
     let response = get_response_extra(
-        &format!("/v1/inference/{}", model_name),
+        &path,
         Method::POST,
         dev,
         true,
@@ -1107,7 +1121,12 @@ fn main() {
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
         },
         Commands::Push { source_image, target_image, assume_yes } => push(&source_image, target_image.as_deref(), assume_yes, opts.dev),
-        Commands::Infer { model, args, outputs } => infer(&model, &args, &outputs, opts.dev),
+        Commands::Infer {
+            model,
+            deploy_id,
+            args,
+            outputs
+        } => infer(model.as_deref(), deploy_id.as_deref(), &args, &outputs, opts.dev),
         Commands::Model { command } => match command {
             ModelCommands::List => models_list(opts.dev),
             ModelCommands::Info { model } => model_info(&model, opts.dev),
