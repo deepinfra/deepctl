@@ -192,6 +192,11 @@ enum ModelCommands {
         #[arg(short('m'), long)]
         model: String,
     },
+    Versions {
+        /// model name
+        #[arg(short('m'), long)]
+        model: String,
+    }
 }
 
 #[derive(Subcommand)]
@@ -534,6 +539,16 @@ fn model_info(model: &str, dev: bool) -> Result<()> {
         get_str(&json, "out_docs")?
     );
 
+    Ok(())
+}
+
+fn model_versions(model_name: &str, dev: bool) -> Result<()> {
+    let json = get_parsed_response(
+        &format!("/models/{}/versions", model_name),
+        Method::GET,
+        dev,
+        false)?;
+    println!("{}", serde_json::to_string_pretty(&json)?);
     Ok(())
 }
 
@@ -1167,6 +1182,7 @@ fn main() {
         Commands::Model { command } => match command {
             ModelCommands::List { visibility } => models_list(visibility, opts.dev),
             ModelCommands::Info { model } => model_info(&model, opts.dev),
+            ModelCommands::Versions { model } => model_versions(&model, opts.dev),
         },
         Commands::Log { command } => match command {
             LogCommands::Query{ deploy_id, from, to, limit, follow} => log_query(opts.dev, deploy_id, from, to, limit, follow),
