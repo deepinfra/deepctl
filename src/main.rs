@@ -191,6 +191,9 @@ enum ModelCommands {
         /// model name
         #[arg(short('m'), long)]
         model: String,
+        /// model version
+        #[arg(short('v'), long)]
+        version: Option<String>,
     },
     Versions {
         /// model name
@@ -503,8 +506,14 @@ fn models_list(visibility: ModelVisibility, dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn model_info(model: &str, dev: bool) -> Result<()> {
-    let json = get_parsed_response(&format!("/models/{}", model), Method::GET, dev, false)?;
+fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
+    let mut params: Vec<(String, String)> = Vec::new();
+    if let Some(version) = version {
+        params.push(("version".to_owned(), version.to_owned()));
+    }
+    let json = get_parsed_response(
+        &build_path(&format!("/models/{}", model), params)?,
+        Method::GET, dev, false)?;
 
     fn get_str<'a>(json: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         json.get(key)
@@ -1181,7 +1190,7 @@ fn main() {
         } => infer(model.as_deref(), deploy_id.as_deref(), &args, &outputs, opts.dev),
         Commands::Model { command } => match command {
             ModelCommands::List { visibility } => models_list(visibility, opts.dev),
-            ModelCommands::Info { model } => model_info(&model, opts.dev),
+            ModelCommands::Info { model, version } => model_info(&model, version.as_deref(), opts.dev),
             ModelCommands::Versions { model } => model_versions(&model, opts.dev),
         },
         Commands::Log { command } => match command {
