@@ -7,6 +7,7 @@ edition = "2021"
 
 
 [dependencies]
+which = "4.4.0"
 clap = { version = "4.0", features = ["derive"] }
 webbrowser = "0.8.4"
 rand = "0.8.5"

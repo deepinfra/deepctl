@@ -83,13 +83,26 @@ enum Commands {
     Infer {
         /// model name
         #[arg(short, long)]
-        model: String,
+        model: Option<String>,
+        /// deploy_id
+        #[arg(short, long)]
+        deploy_id: Option<String>,
         /// inference arguments (eg. -i k=v -i k2=v2)
         #[arg(short('i'), value_parser = infer_args_parser)]
         args: Vec<(String, String)>,
         /// inference output (eg. -i images=dir/image.{IDX}.{EXT})
         #[arg(short('o'), value_parser = infer_out_parser)]
         outputs: Vec<(String, String)>,
+    },
+    /// Push a local docker image to deepinfra registry for custom inference
+    Push {
+        /// an existing local image name to be pushed
+        source_image: String,
+        /// an optional remote image name (it would be inferred otherwise)
+        target_image: Option<String>,
+        /// assume yes
+        #[arg(short('y'), default_value_t=false)]
+        assume_yes: bool,
     },
     /// Fetch inference logs
     Log {
@@ -157,16 +170,36 @@ enum ModelTask {
     ZeroShotImageClassification,
 }
 
+#[derive(Serialize, Deserialize, ValueEnum, Eq, PartialEq, Clone, Debug)]
+#[serde(rename_all="kebab-case")]
+enum ModelVisibility {
+    Private,
+    Public,
+    Auto,
+    All,
+}
+
 #[derive(Subcommand)]
 enum ModelCommands {
     /// list models
-    List,
+    List {
+        #[arg(long, default_value="auto")]
+        visibility: ModelVisibility,
+    },
     /// get model info
     Info {
         /// model name
         #[arg(short('m'), long)]
         model: String,
+        /// model version
+        #[arg(short('v'), long)]
+        version: Option<String>,
     },
+    Versions {
+        /// model name
+        #[arg(short('m'), long)]
+        model: String,
+    }
 }
 
 #[derive(Subcommand)]
@@ -336,7 +369,8 @@ fn auth_login(dev: bool) -> Result<()> {
             .and_then(|v| v.as_str())
             .ok_or(DeepCtlError::ApiMismatch("login should return access_token".into()))?;
 
-        write_config(&ConfigData { access_token: token.into() }, dev)?;
+        auth_set_token(token, dev, false)?;
+        // write_config(&ConfigData { access_token: token.into() }, dev)?;
         println!("login successful");
         Ok(())
     } else {
@@ -404,9 +438,16 @@ fn auth_token(dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn auth_set_token(token: &str, dev: bool) -> Result<()> {
+fn auth_docker_login(token: &str, dev: bool, _user_provided: bool) -> Result<()> {
+    Ok(deepctl::docker::login(&get_display_name(dev)?, token, deepctl::docker::DEEPINFRA_REGISTRY)?)
+}
+
+fn auth_set_token(token: &str, dev: bool, user_provided: bool) -> Result<()> {
     write_config(&ConfigData { access_token: token.into() }, dev)?;
-    Ok(())
+    auth_docker_login(token, dev, user_provided).or_else(|e| {
+        eprintln!("Failed to store docker credentials. `deepctl push` would likely not work: {:?}", e);
+        Ok(())
+    })
 }
 
 fn get_http_client(dev: bool) -> Result<reqwest::blocking::Client> {
@@ -415,8 +456,9 @@ fn get_http_client(dev: bool) -> Result<reqwest::blocking::Client> {
         .build()?)
 }
 
-fn models_list(dev: bool) -> Result<()> {
-    let json = get_parsed_response("/models/list", Method::GET, dev, true)?;
+fn _model_list_api(public: bool, dev: bool) -> Result<Vec<(String, String)>> {
+    let path = if public { "/models/list" } else { "/models/private/list" };
+    let json = get_parsed_response(path, Method::GET, dev, true)?;
     let mut models = json
         .as_array()
         .ok_or(DeepCtlError::ApiMismatch("/models/list doesn't contain a models array".into()))?
@@ -425,12 +467,36 @@ fn models_list(dev: bool) -> Result<()> {
             if let (Some(m_type), Some(model_name)) = (
                     model.get("type").and_then(|prop| prop.as_str()),
                     model.get("model_name").and_then(|prop| prop.as_str())) {
-                Some((m_type, model_name))
+                Some((m_type.to_owned(), model_name.to_owned()))
             } else {
                 None
             }
         })
-        .collect::<Vec<(&str, &str)>>();
+        .collect::<Vec<(String, String)>>();
+
+    models.sort();
+
+    Ok(models)
+}
+
+fn models_list(visibility: ModelVisibility, dev: bool) -> Result<()> {
+    let mut models = match visibility {
+        ModelVisibility::Private => _model_list_api(false, dev)?,
+        ModelVisibility::Public => _model_list_api(true, dev)?,
+        ModelVisibility::Auto => {
+            let private = _model_list_api(false, dev)?;
+            if private.is_empty() {
+                _model_list_api(true, dev)?
+            } else {
+                private
+            }
+        },
+        ModelVisibility::All => {
+            let mut all = _model_list_api(false, dev)?;
+            all.append(&mut _model_list_api(true, dev)?);
+            all
+        },
+    };
 
     models.sort();
 
@@ -440,8 +506,14 @@ fn models_list(dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn model_info(model: &str, dev: bool) -> Result<()> {
-    let json = get_parsed_response(&format!("/models/{}", model), Method::GET, dev, false)?;
+fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
+    let mut params: Vec<(String, String)> = Vec::new();
+    if let Some(version) = version {
+        params.push(("version".to_owned(), version.to_owned()));
+    }
+    let json = get_parsed_response(
+        &build_path(&format!("/models/{}", model), params)?,
+        Method::GET, dev, false)?;
 
     fn get_str<'a>(json: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         json.get(key)
@@ -476,6 +548,16 @@ fn model_info(model: &str, dev: bool) -> Result<()> {
         get_str(&json, "out_docs")?
     );
 
+    Ok(())
+}
+
+fn model_versions(model_name: &str, dev: bool) -> Result<()> {
+    let json = get_parsed_response(
+        &format!("/models/{}/versions", model_name),
+        Method::GET,
+        dev,
+        false)?;
+    println!("{}", serde_json::to_string_pretty(&json)?);
     Ok(())
 }
 
@@ -699,11 +781,64 @@ fn infer_out_part(value: &serde_json::Value, location: &str) -> Result<()> {
     }
 }
 
-fn infer(model_name: &str, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
+fn get_display_name(dev: bool) -> Result<String> {
+    let profile = get_parsed_response("/v1/me", Method::GET, dev, true)
+        .with_context(|| format!("failed to fetch profile"))?;
+    Ok(profile.get("display_name")
+        .and_then(|dn| dn.as_str())
+        .ok_or(DeepCtlError::ApiMismatch("/v1/me doesn't contain display_name".into()))?
+        .to_owned())
+}
+
+fn prompt(msg: &str) -> Result<String> {
+    eprint!("{}", msg);
+    let mut buffer = String::new();
+    let stdin = std::io::stdin();
+    stdin.read_line(&mut buffer)?;
+    Ok(buffer.trim().to_owned())
+}
+
+fn push(source_image: &str, target_image: Option<&str>, assume_yes: bool, dev: bool) -> Result<()> {
+    let display_name = get_display_name(dev)?;
+    // if the source is already properly tagged, and there is no target provided, just use the source as-is
+    let target_image = if source_image.starts_with(deepctl::docker::DEEPINFRA_REGISTRY) && target_image == None {
+        Some(source_image)
+    } else {
+        target_image
+    };
+    if let Some(full_target_image) = deepctl::docker::suggest_remote_name(
+            source_image, target_image,
+            deepctl::docker::DEEPINFRA_REGISTRY, &display_name) {
+        if target_image.map(|ti| ti == full_target_image) != Some(true) && !assume_yes {
+            let response = prompt(&format!("Pushing {} to {}. [Yn]: ", source_image, full_target_image))?;
+            if !(response == "" || response.to_lowercase() == "y") {
+                return Ok(());
+            }
+        }
+        deepctl::docker::tag(source_image, &full_target_image)?;
+        deepctl::docker::push(&full_target_image)?;
+        Ok(())
+    } else {
+        Err(DeepCtlError::BadInput("bad TARGET_IMAGE".to_owned()).into())
+    }
+}
+
+fn infer(model_name: Option<&str>, deploy_id: Option<&str>, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
     let form = infer_body(args)?;
 
+    if (model_name.is_some() as i32) + (deploy_id.is_some() as i32) != 1 {
+        return Err(DeepCtlError::BadInput(
+            "exactly ONE of --model-name or --deploy-id is required for inference".to_owned()).into());
+    }
+
+    let path = if model_name.is_some() {
+        format!("/v1/inference/{}", model_name.unwrap())
+    } else {
+        format!("/v1/inference/deploy/{}", deploy_id.unwrap())
+    };
+
     let response = get_response_extra(
-        &format!("/v1/inference/{}", model_name),
+        &path,
         Method::POST,
         dev,
         true,
@@ -1037,7 +1172,7 @@ fn main() {
                 AuthCommands::Login => auth_login(opts.dev),
                 AuthCommands::Logout => auth_logout(opts.dev),
                 AuthCommands::Token => auth_token(opts.dev),
-                AuthCommands::SetToken { token } => auth_set_token(&token, opts.dev),
+                AuthCommands::SetToken { token } => auth_set_token(&token, opts.dev, true),
             }
         }
         Commands::Deploy { command } => match command {
@@ -1046,10 +1181,17 @@ fn main() {
             DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
         },
-        Commands::Infer { model, args, outputs } => infer(&model, &args, &outputs, opts.dev),
+        Commands::Push { source_image, target_image, assume_yes } => push(&source_image, target_image.as_deref(), assume_yes, opts.dev),
+        Commands::Infer {
+            model,
+            deploy_id,
+            args,
+            outputs
+        } => infer(model.as_deref(), deploy_id.as_deref(), &args, &outputs, opts.dev),
         Commands::Model { command } => match command {
-            ModelCommands::List => models_list(opts.dev),
-            ModelCommands::Info { model } => model_info(&model, opts.dev),
+            ModelCommands::List { visibility } => models_list(visibility, opts.dev),
+            ModelCommands::Info { model, version } => model_info(&model, version.as_deref(), opts.dev),
+            ModelCommands::Versions { model } => model_versions(&model, opts.dev),
         },
         Commands::Log { command } => match command {
             LogCommands::Query{ deploy_id, from, to, limit, follow} => log_query(opts.dev, deploy_id, from, to, limit, follow),
