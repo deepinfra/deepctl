@@ -588,17 +588,34 @@ fn parse_base64(b64: &str) -> Result<Vec<u8>> {
 fn infer_body(args: &Vec<(String, String)>) -> Result<multipart::Form> {
     let mut form = multipart::Form::new();
     for (key, inp_value) in args {
-        let raw_value = if inp_value.starts_with("@") {
-            read_binary_file(&inp_value[1..])?
+        let (raw_value, file_name) = if inp_value.starts_with("@") {
+            (read_binary_file(&inp_value[1..])?, Some(inp_value[1..].to_owned()))
         } else if inp_value.starts_with("base64:") {
-            parse_base64(&inp_value[7..])?
+            (parse_base64(&inp_value[7..])?, Some("filename.ext".to_owned()))
         } else {
-            inp_value.as_bytes().to_vec()
+            (inp_value.as_bytes().to_vec(), None)
         };
 
         let mut part = multipart::Part::bytes(raw_value);
         // the filename forces the backend to treat this data as binary
-        part = part.file_name("filename.ext");
+        match file_name {
+            Some(ref name) => {
+                part = part.file_name(name.to_owned());
+                let guess = mime_guess::from_path(name);
+                match guess.first() {
+                    Some(mime) => {
+                        part = part.mime_str(mime.as_ref())?;
+                    }
+                    None => {
+                        part = part.mime_str("application/octet-stream")?;
+                    }
+                }
+            }
+            None => {
+                part = part.mime_str("text/plain")?;
+            }
+        }
+
         form = form.part(key.to_owned(), part);
     }
 

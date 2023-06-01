@@ -20,6 +20,7 @@ anyhow = "1.0"
 thiserror = "1.0.38"
 base64 = "0.20.0"
 chrono = { version = "0.4.24" }
+mime_guess = { version = "2.0.4" }
 # time = { version = "0.3.20", features = ["std", "alloc", "formatting", "parsing", "macros"] }
 # TODO: Drop this once h2/hyper/hyper-tls update tokio dep
 # Ref: https://github.com/deepinfra/deepctl/security/dependabot/2

@@ -272,6 +272,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "mime_guess",
  "openssl",
  "rand",
  "reqwest",
