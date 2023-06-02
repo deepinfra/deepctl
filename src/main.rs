@@ -471,7 +471,8 @@ fn get_http_client(dev: bool) -> Result<reqwest::blocking::Client> {
 
 fn _model_list_api(public: bool, dev: bool) -> Result<Vec<(String, String)>> {
     let path = if public { "/models/list" } else { "/models/private/list" };
-    let json = get_parsed_response(path, Method::GET, dev, Auth::Required)?;
+    let auth = if public { Auth::Optional } else { Auth::Required };
+    let json = get_parsed_response(path, Method::GET, dev, auth)?;
     let mut models = json
         .as_array()
         .ok_or(DeepCtlError::ApiMismatch("/models/list doesn't contain a models array".into()))?
@@ -501,14 +502,16 @@ fn models_list(visibility: ModelVisibility, dev: bool) -> Result<()> {
             print_models(&mut _model_list_api(true, dev)?);
         },
         ModelVisibility::All => {
-            let mut private = _model_list_api(false, dev)?;
             let mut public = _model_list_api(true, dev)?;
-
             println!("Public Models:");
             print_models(&mut public);
-            println!();
-            println!("Private Models:");
-            print_models(&mut private);
+            let access_token = get_access_token(dev);
+            if access_token.is_ok() {
+                let mut private = _model_list_api(false, dev)?;
+                println!();
+                println!("Private Models:");
+                print_models(&mut private);
+            }
         },
     };
 
