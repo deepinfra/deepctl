@@ -858,7 +858,7 @@ fn infer(model_name: Option<&str>, deploy_id: Option<&str>, args: &Vec<(String, 
         &path,
         Method::POST,
         dev,
-        Auth::Required,
+        Auth::Optional,
         move |rb| {
             rb.timeout(std::time::Duration::from_secs(1800))
                 .multipart(form)
