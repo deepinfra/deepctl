@@ -26,6 +26,12 @@ const LOGIN_PATH_DEV: &str = "/github/login";
 const VERSION_CHECK_SEC: i64 = 60 * 60 * 24 * 7; // 1 week
 const GITHUB_RELEASE_LATEST: &str = "https://github.com/deepinfra/deepctl/releases/latest/download";
 
+pub enum Auth {
+    None,
+    Optional,
+    Required
+}
+
 #[derive(Error, Debug)]
 pub enum DeepCtlError {
     #[error("Error: {0}")]
@@ -175,7 +181,6 @@ enum ModelTask {
 enum ModelVisibility {
     Private,
     Public,
-    Auto,
     All,
 }
 
@@ -183,7 +188,7 @@ enum ModelVisibility {
 enum ModelCommands {
     /// list models
     List {
-        #[arg(long, default_value="auto")]
+        #[arg(long, default_value="all")]
         visibility: ModelVisibility,
     },
     /// get model info
@@ -275,7 +280,7 @@ fn get_response_extra<BM>(
     path: &str,
     method: Method,
     dev: bool,
-    auth: bool,
+    auth: Auth,
     builder_map: BM,
 ) -> Result<reqwest::blocking::Response>
 where
@@ -285,11 +290,19 @@ where
     let host = get_host(dev);
     let mut rb = client.request(method, format!("{}{}", host, path));
 
-    if auth {
-        let access_token = get_access_token(dev).map_err(DeepCtlError::NotLoggedIn)?;
-        rb = rb.bearer_auth(access_token);
+    match auth {
+        Auth::Optional => {
+            let access_token = get_access_token(dev);
+            if access_token.is_ok() {
+                rb = rb.bearer_auth(access_token.unwrap());
+            }
+        }
+        Auth::Required => {
+            let access_token = get_access_token(dev).map_err(DeepCtlError::NotLoggedIn)?;
+            rb = rb.bearer_auth(access_token);
+        }
+        Auth::None => {}
     }
-
     rb = builder_map(rb);
 
     Ok(rb.send()?)
@@ -299,7 +312,7 @@ fn get_response(
     path: &str,
     method: Method,
     dev: bool,
-    auth: bool,
+    auth: Auth,
 ) -> Result<reqwest::blocking::Response> {
     get_response_extra(path, method, dev, auth, |rb| rb)
 }
@@ -308,7 +321,7 @@ fn get_parsed_response_extra<BM>(
     path: &str,
     method: Method,
     dev: bool,
-    auth: bool,
+    auth: Auth,
     builder_map: BM,
 ) -> Result<serde_json::Value>
 where
@@ -323,7 +336,7 @@ fn get_parsed_response(
     path: &str,
     method: Method,
     dev: bool,
-    auth: bool,
+    auth: Auth,
 ) -> Result<serde_json::Value> {
     get_parsed_response_extra(path, method, dev, auth, |rb| rb)
 }
@@ -362,7 +375,7 @@ fn auth_login(dev: bool) -> Result<()> {
             &format!("/github/cli/login?login_id={}", login_id),
             Method::GET,
             dev,
-            false,
+            Auth::None,
             |rb| rb.timeout(std::time::Duration::from_secs(300)),
         ).context("waiting for auth result from backend")?;
         let token = json.get("access_token")
@@ -458,7 +471,7 @@ fn get_http_client(dev: bool) -> Result<reqwest::blocking::Client> {
 
 fn _model_list_api(public: bool, dev: bool) -> Result<Vec<(String, String)>> {
     let path = if public { "/models/list" } else { "/models/private/list" };
-    let json = get_parsed_response(path, Method::GET, dev, true)?;
+    let json = get_parsed_response(path, Method::GET, dev, Auth::Required)?;
     let mut models = json
         .as_array()
         .ok_or(DeepCtlError::ApiMismatch("/models/list doesn't contain a models array".into()))?
@@ -480,30 +493,34 @@ fn _model_list_api(public: bool, dev: bool) -> Result<Vec<(String, String)>> {
 }
 
 fn models_list(visibility: ModelVisibility, dev: bool) -> Result<()> {
-    let mut models = match visibility {
-        ModelVisibility::Private => _model_list_api(false, dev)?,
-        ModelVisibility::Public => _model_list_api(true, dev)?,
-        ModelVisibility::Auto => {
-            let private = _model_list_api(false, dev)?;
-            if private.is_empty() {
-                _model_list_api(true, dev)?
-            } else {
-                private
-            }
+    match visibility {
+        ModelVisibility::Private => {
+            print_models(&mut _model_list_api(false, dev)?);
+        },
+        ModelVisibility::Public => {
+            print_models(&mut _model_list_api(true, dev)?);
         },
         ModelVisibility::All => {
-            let mut all = _model_list_api(false, dev)?;
-            all.append(&mut _model_list_api(true, dev)?);
-            all
+            let mut private = _model_list_api(false, dev)?;
+            let mut public = _model_list_api(true, dev)?;
+
+            println!("Public Models:");
+            print_models(&mut public);
+            println!();
+            println!("Private Models:");
+            print_models(&mut private);
         },
     };
 
+    Ok(())
+}
+
+fn print_models(models: &mut Vec<(String, String)>) {
     models.sort();
 
     models.iter().for_each(|(m_type, model_name)| {
         println!("{}: {}", m_type, model_name);
     });
-    Ok(())
 }
 
 fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
@@ -513,7 +530,7 @@ fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
     }
     let json = get_parsed_response(
         &build_path(&format!("/models/{}", model), params)?,
-        Method::GET, dev, false)?;
+        Method::GET, dev, Auth::Optional)?;
 
     fn get_str<'a>(json: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         json.get(key)
@@ -556,7 +573,7 @@ fn model_versions(model_name: &str, dev: bool) -> Result<()> {
         &format!("/models/{}/versions", model_name),
         Method::GET,
         dev,
-        false)?;
+        Auth::Optional)?;
     println!("{}", serde_json::to_string_pretty(&json)?);
     Ok(())
 }
@@ -573,7 +590,7 @@ fn get_host(dev: bool) -> String {
 }
 
 fn deploy_list(dev: bool, state: DeployState) -> Result<()> {
-    let json = get_parsed_response("/deploy/list/", Method::GET, dev, true)?;
+    let json = get_parsed_response("/deploy/list/", Method::GET, dev, Auth::Required)?;
     let allowed_statuses = match state {
         DeployState::ACTIVE => vec!["initializing", "deploying", "running"],
         DeployState::INACTIVE => vec!["failed", "deleted"],
@@ -599,13 +616,13 @@ fn deploy_list(dev: bool, state: DeployState) -> Result<()> {
 }
 
 fn deploy_info(deploy_id: &str, dev: bool) -> Result<()> {
-    let json = get_parsed_response(&format!("/deploy/{}", deploy_id), Method::GET, dev, true)?;
+    let json = get_parsed_response(&format!("/deploy/{}", deploy_id), Method::GET, dev, Auth::Required)?;
     println!("{}", serde_json::to_string_pretty(&json)?);
     Ok(())
 }
 
 fn deploy_delete(deploy_id: &str, dev: bool) -> Result<()> {
-    get_response(&format!("/deploy/{}", deploy_id), Method::DELETE, dev, true)?
+    get_response(&format!("/deploy/{}", deploy_id), Method::DELETE, dev, Auth::Required)?
         .error_for_status()?;
     Ok(())
 }
@@ -619,7 +636,7 @@ fn deploy_create(model_name: &str, task: Option<&ModelTask>, dev: bool) -> Resul
         };
         serde_json::to_string(&params)?
     };
-    let json = get_parsed_response_extra("/deploy/hf/", Method::POST, dev, true, |rb| {
+    let json = get_parsed_response_extra("/deploy/hf/", Method::POST, dev, Auth::Required, |rb| {
         rb.header("Content-type", "application/json").body(body)
     })?;
 
@@ -630,7 +647,7 @@ fn deploy_create(model_name: &str, task: Option<&ModelTask>, dev: bool) -> Resul
     let mut last_status = String::new();
     loop {
         let tjson =
-            get_parsed_response(&format!("/deploy/{}", &deploy_id), Method::GET, dev, true)?;
+            get_parsed_response(&format!("/deploy/{}", &deploy_id), Method::GET, dev, Auth::Required)?;
         let status = tjson.get("status")
             .and_then(serde_json::Value::as_str)
             .ok_or(DeepCtlError::ApiMismatch("deploy info response should contain status".into()))?;
@@ -782,7 +799,7 @@ fn infer_out_part(value: &serde_json::Value, location: &str) -> Result<()> {
 }
 
 fn get_display_name(dev: bool) -> Result<String> {
-    let profile = get_parsed_response("/v1/me", Method::GET, dev, true)
+    let profile = get_parsed_response("/v1/me", Method::GET, dev, Auth::Required)
         .with_context(|| format!("failed to fetch profile"))?;
     Ok(profile.get("display_name")
         .and_then(|dn| dn.as_str())
@@ -841,7 +858,7 @@ fn infer(model_name: Option<&str>, deploy_id: Option<&str>, args: &Vec<(String, 
         &path,
         Method::POST,
         dev,
-        true,
+        Auth::Optional,
         move |rb| {
             rb.timeout(std::time::Duration::from_secs(1800))
                 .multipart(form)
@@ -895,7 +912,7 @@ fn check_version_with_server(dev: bool) -> Result<VersionData> {
         &format!("/cli/version?version={}", VERSION),
         Method::GET,
         dev,
-        false,
+        Auth::None,
     )?;
     fn get_str<'a>(json: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         json.get(key)
@@ -990,7 +1007,7 @@ fn log_query_raw<F: Fn(&str, &str)>(dev: bool, deploy_id: &str, from: Option<Str
     }
     params.push(("limit".into(), format!("{}", limit)));
 
-    let res = get_parsed_response(&build_path("/v1/logs/query", params.iter())?, Method::GET, dev, true)?;
+    let res = get_parsed_response(&build_path("/v1/logs/query", params.iter())?, Method::GET, dev, Auth::Required)?;
 
     res.get("entries")
             .ok_or(DeepCtlError::ApiMismatch("expected entries array".into()))?
