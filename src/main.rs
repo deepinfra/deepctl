@@ -530,7 +530,7 @@ fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
     }
     let json = get_parsed_response(
         &build_path(&format!("/models/{}", model), params)?,
-        Method::GET, dev, Auth::Required)?;
+        Method::GET, dev, Auth::Optional)?;
 
     fn get_str<'a>(json: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         json.get(key)
