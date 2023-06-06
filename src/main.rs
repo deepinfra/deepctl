@@ -90,6 +90,9 @@ enum Commands {
         /// model name
         #[arg(short, long)]
         model: Option<String>,
+        /// model version
+        #[arg(long)]
+        version: Option<String>,
         /// deploy_id
         #[arg(short, long)]
         deploy_id: Option<String>,
@@ -843,16 +846,24 @@ fn push(source_image: &str, target_image: Option<&str>, assume_yes: bool, dev: b
     }
 }
 
-fn infer(model_name: Option<&str>, deploy_id: Option<&str>, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
+fn infer(model_name: Option<&str>, version: Option<&str>, deploy_id: Option<&str>, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
     let form = infer_body(args)?;
 
-    if (model_name.is_some() as i32) + (deploy_id.is_some() as i32) != 1 {
+    if ((model_name.is_some() || version.is_some()) as i32) + (deploy_id.is_some() as i32) != 1 {
         return Err(DeepCtlError::BadInput(
-            "exactly ONE of --model-name or --deploy-id is required for inference".to_owned()).into());
+            "exactly ONE of --model(+ --version) or --deploy-id is required for inference".to_owned()).into());
+    }
+    if version.is_some() && model_name.is_none() {
+        return Err(DeepCtlError::BadInput(
+            "can not pass --version without --model".to_owned()).into());
     }
 
     let path = if model_name.is_some() {
-        format!("/v1/inference/{}", model_name.unwrap())
+        let mut params: Vec<(String, String)> = vec![];
+        if let Some(version) = version {
+            params.push(("version".into(), version.to_owned()));
+        }
+        build_path(&format!("/v1/inference/{}", model_name.unwrap()), params.iter())?
     } else {
         format!("/v1/inference/deploy/{}", deploy_id.unwrap())
     };
@@ -1204,10 +1215,11 @@ fn main() {
         Commands::Push { source_image, target_image, assume_yes } => push(&source_image, target_image.as_deref(), assume_yes, opts.dev),
         Commands::Infer {
             model,
+            version,
             deploy_id,
             args,
             outputs
-        } => infer(model.as_deref(), deploy_id.as_deref(), &args, &outputs, opts.dev),
+        } => infer(model.as_deref(), version.as_deref(), deploy_id.as_deref(), &args, &outputs, opts.dev),
         Commands::Model { command } => match command {
             ModelCommands::List { visibility } => models_list(visibility, opts.dev),
             ModelCommands::Info { model, version } => model_info(&model, version.as_deref(), opts.dev),
