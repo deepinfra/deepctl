@@ -547,6 +547,7 @@ fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
     // println!("{:?}", json);
     println!("model: {}", model);
     println!("type: {}", get_str(&json, "type")?);
+    println!("version: {}", get_str(&json, "version")?);
     if let Ok(mask_token) = get_str(&json, "mask_token") {
         println!("mask token: {}", mask_token);
     }
