@@ -203,6 +203,7 @@ enum ModelCommands {
         #[arg(short('v'), long)]
         version: Option<String>,
     },
+    /// get available model versions
     Versions {
         /// model name
         #[arg(short('m'), long)]
