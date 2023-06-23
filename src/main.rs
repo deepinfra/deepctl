@@ -569,6 +569,14 @@ fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
             .ok_or(DeepCtlError::ApiMismatch(format!("model info should contain {} of type string", key)).into())
     }
 
+    fn handle_data_uri(content: &str) -> String {
+        if content.starts_with("data:") {
+            return "(binary)".to_owned()
+        } else {
+            return content.to_owned()
+        }
+    }
+
     // println!("{:?}", json);
     println!("model: {}", model);
     println!("type: {}", get_str(&json, "type")?);
@@ -591,10 +599,10 @@ fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
             println!("license: {}", license_url);
         }
         if let Some(cover_img_url) = meta.get("cover_img_url").and_then(|v| v.as_str()) {
-            println!("cover_image: {}", cover_img_url);
+            println!("cover_image: {}", handle_data_uri(cover_img_url));
         }
         if let Some(readme) = meta.get("readme").and_then(|v| v.as_str()) {
-            println!("README:\n\n{}", readme);
+            println!("README:\n{}\n", handle_data_uri(readme));
         }
     }
     println!(
