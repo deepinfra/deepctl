@@ -548,8 +548,29 @@ fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
     println!("model: {}", model);
     println!("type: {}", get_str(&json, "type")?);
     println!("version: {}", get_str(&json, "version")?);
+    println!("public: {}", json.get("public").and_then(|v| v.as_bool()) != Some(false));
     if let Ok(mask_token) = get_str(&json, "mask_token") {
         println!("mask token: {}", mask_token);
+    }
+    if let Ok(desc) = get_str(&json, "description") {
+        println!("description: {}", desc);
+    }
+    if let Some(meta) = json.get("meta").and_then(|v| v.as_object()) {
+        if let Some(github_url) = meta.get("github_url").and_then(|v| v.as_str()) {
+            println!("github: {}", github_url);
+        }
+        if let Some(paper_url) = meta.get("paper_url").and_then(|v| v.as_str()) {
+            println!("paper: {}", paper_url);
+        }
+        if let Some(license_url) = meta.get("license_url").and_then(|v| v.as_str()) {
+            println!("license: {}", license_url);
+        }
+        if let Some(cover_img_url) = meta.get("cover_img_url").and_then(|v| v.as_str()) {
+            println!("cover_image: {}", cover_img_url);
+        }
+        if let Some(readme) = meta.get("readme").and_then(|v| v.as_str()) {
+            println!("README:\n\n{}", readme);
+        }
     }
     println!(
         "CURL invocation:\n\n {}\n",
