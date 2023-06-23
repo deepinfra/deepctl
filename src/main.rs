@@ -208,6 +208,30 @@ enum ModelCommands {
         /// model name
         #[arg(short('m'), long)]
         model: String,
+    },
+    Set {
+        model: String,
+        /// short description
+        #[arg(long)]
+        description: Option<String>,
+        /// whether the model is public (visible to all users) or private (visible only to you)
+        #[arg(long)]
+        public: Option<bool>,
+        /// github link for model project
+        #[arg(long)]
+        github_url: Option<String>,
+        /// link to paper associated with model
+        #[arg(long)]
+        paper_url: Option<String>,
+        /// link to license
+        #[arg(long)]
+        license_url: Option<String>,
+        /// a URL or @path/to/file.jpg to a cover image
+        #[arg(long)]
+        cover_image: Option<String>,
+        /// a @path/to/file to a model readme
+        #[arg(long)]
+        readme: Option<String>,
     }
 }
 
@@ -604,6 +628,86 @@ fn model_versions(model_name: &str, dev: bool) -> Result<()> {
         dev,
         Auth::Optional)?;
     println!("{}", serde_json::to_string_pretty(&json)?);
+    Ok(())
+}
+
+fn file_to_data_url(path: &str) -> Result<String> {
+    let content = read_binary_file(path)?;
+    let b64_content = base64::encode(content);
+    Ok(format!("data:;base64,{}", b64_content))
+}
+
+fn model_set(
+    model: &str,
+    description: Option<&str>,
+    public: Option<bool>,
+    github_url: Option<&str>,
+    paper_url: Option<&str>,
+    license_url: Option<&str>,
+    cover_image: Option<&str>,
+    readme: Option<&str>,
+    dev: bool,
+) -> Result<()> {
+    let mut meta_body = std::collections::HashMap::new();
+    if let Some(description) = description {
+        meta_body.insert("description".to_owned(), description.to_owned());
+    }
+    if let Some(github_url) = github_url {
+        meta_body.insert("github_url".to_owned(), github_url.to_owned());
+    }
+    if let Some(paper_url) = paper_url {
+        meta_body.insert("paper_url".to_owned(), paper_url.to_owned());
+    }
+    if let Some(license_url) = license_url {
+        meta_body.insert("license_url".into(), license_url.to_owned());
+    }
+    if let Some(cover_image) = cover_image {
+        let cover_image_url = if cover_image.starts_with("@") {
+            file_to_data_url(&cover_image[1..])?
+        } else if cover_image.starts_with("http://") || cover_image.starts_with("https://") {
+            cover_image.to_owned()
+        } else {
+            return Err(DeepCtlError::BadInput(
+                "the cover_image should be an http(s) url or @path/to/local/file".to_owned()).into());
+        };
+        meta_body.insert("cover_img_url".to_owned(), cover_image_url);
+    }
+    if let Some(readme) = readme {
+        let readme_url = if readme.starts_with("@") {
+            file_to_data_url(&readme[1..])?
+        } else {
+            return Err(DeepCtlError::BadInput(
+                "the readme should be in @path/to/local/file format".to_owned()).into());
+        };
+        meta_body.insert("readme".to_owned(), readme_url);
+    }
+    if !meta_body.is_empty() {
+        let body = serde_json::to_string(&meta_body)?;
+        let res = get_response_extra(
+            &format!("/models/{}/meta", model),
+            Method::POST, dev, Auth::Required, |rb|
+                rb.header("Content-Type", "application/json").body(body)
+        ).context("updating model metadata")?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(DeepCtlError::BadInput(format!("the model {} doesn't exist", model)).into());
+        } else if res.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(DeepCtlError::BadInput(format!("lacking permissions to edit model {}", model)).into());
+        }
+    }
+
+    if let Some(public) = public {
+        let body = serde_json::to_string(&serde_json::json!({"public": public}))?;
+        let res = get_response_extra(
+            &format!("/models/{}/publicity", model),
+            Method::POST, dev, Auth::Required, |rb|
+               rb.header("Content-Type", "application/json").body(body)
+        ).context("setting model publicity")?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(DeepCtlError::BadInput(format!("the model {} doesn't exist", model)).into());
+        } else if res.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(DeepCtlError::BadInput(format!("lacking permissions to edit model {}", model)).into());
+        }
+    }
     Ok(())
 }
 
@@ -1247,6 +1351,7 @@ fn main() {
             ModelCommands::List { visibility } => models_list(visibility, opts.dev),
             ModelCommands::Info { model, version } => model_info(&model, version.as_deref(), opts.dev),
             ModelCommands::Versions { model } => model_versions(&model, opts.dev),
+            ModelCommands::Set { model, description, public, github_url, paper_url, license_url, cover_image, readme } => model_set(&model, description.as_deref(), public, github_url.as_deref(), paper_url.as_deref(), license_url.as_deref(), cover_image.as_deref(), readme.as_deref(), opts.dev),
         },
         Commands::Log { command } => match command {
             LogCommands::Query{ deploy_id, from, to, limit, follow} => log_query(opts.dev, deploy_id, from, to, limit, follow),
