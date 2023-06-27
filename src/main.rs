@@ -488,7 +488,10 @@ fn auth_set_token(token: &str, dev: bool, user_provided: bool) -> Result<()> {
         return Err(DeepCtlError::BadInput("token is not valid".to_owned()).into());
     }
     write_config(&ConfigData { access_token: token.into() }, dev)?;
-    auth_docker_login(token, dev, user_provided).or_else(|e| {
+    println!("--- running docker login ---");
+    let docker_res = auth_docker_login(token, dev, user_provided);
+    println!("--- docker login finished ---");
+    docker_res.or_else(|e| {
         eprintln!("Failed to store docker credentials. `deepctl push` would likely not work: {:?}", e);
         Ok(())
     })
