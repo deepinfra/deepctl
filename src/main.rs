@@ -249,17 +249,9 @@ enum ModelCommands {
 }
 
 #[derive(Subcommand)]
-enum TestSubcommands {
-    /// test command1
-    Command1,
-    /// test command2
-    Command2,
-    /// check cli version
-    Version,
-}
-
-#[derive(Subcommand)]
 enum VersionSubcommands {
+    /// show current version
+    Info,
     /// check for newer version
     Check,
     /// self update to latest version
@@ -1316,6 +1308,11 @@ fn perform_update(dev: bool) -> Result<()> {
     Ok(())
 }
 
+fn print_version() -> Result<()> {
+    println!("deepctl {}", VERSION);
+    Ok(())
+}
+
 fn find_in_chain<T>(e: &anyhow::Error) -> Option<&T>
 where
     T: std::error::Error + 'static,
@@ -1343,6 +1340,7 @@ fn main() {
         Commands::Version { command } => match command {
             VersionSubcommands::Check => main_version_check(opts.dev, true),
             VersionSubcommands::Update => perform_update(opts.dev),
+            VersionSubcommands::Info => print_version(),
         },
         Commands::Auth { command } => {
             match command {
