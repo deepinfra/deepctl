@@ -113,10 +113,22 @@ enum Commands {
         #[arg(short('y'), default_value_t=false)]
         assume_yes: bool,
     },
-    /// Fetch inference logs
+    /// Query inference logs
     Log {
-        #[command(subcommand)]
-        command: LogCommands,
+        /// query logs for this deploy_id
+        deploy_id: String,
+        /// from timestamp in YYYY-MM-DD, YYYY-MM-DD HH:MM:SS(.sss), or unix timestamp in fractional seconds (inclusive)
+        #[arg(long)]
+        from: Option<String>,
+        /// to   timestamp in YYYY-MM-DD, YYYY-MM-DD HH:MM:SS(.sss), or unix timestamp in fractional seconds (exclusive)
+        #[arg(long)]
+        to: Option<String>,
+        /// limit the number of returned log lines
+        #[arg(long, default_value_t=100)]
+        limit: i32,
+        /// print new log lines as they become available
+        #[arg(short, long, default_value_t=false)]
+        follow: bool,
     },
     /// version command
     Version {
@@ -251,27 +263,6 @@ enum VersionSubcommands {
     Check,
     /// self update to latest version
     Update,
-}
-
-#[derive(Subcommand)]
-enum LogCommands {
-    /// Query the inference log for a particular deploy_id
-    Query {
-        /// query logs for this deploy_id
-        deploy_id: String,
-        /// from timestamp in YYYY-MM-DD, YYYY-MM-DD HH:MM:SS(.sss), or unix timestamp in fractional seconds (inclusive)
-        #[arg(long)]
-        from: Option<String>,
-        /// to   timestamp in YYYY-MM-DD, YYYY-MM-DD HH:MM:SS(.sss), or unix timestamp in fractional seconds (exclusive)
-        #[arg(long)]
-        to: Option<String>,
-        /// limit the number of returned log lines
-        #[arg(long, default_value_t=100)]
-        limit: i32,
-        /// print new log lines as they become available
-        #[arg(short, long, default_value_t=false)]
-        follow: bool,
-    },
 }
 
 /// deploy state
@@ -1361,9 +1352,7 @@ fn main() {
             ModelCommands::Versions { model } => model_versions(&model, opts.dev),
             ModelCommands::Set { model, description, public, github_url, paper_url, license_url, cover_image, readme } => model_set(&model, description.as_deref(), public, github_url.as_deref(), paper_url.as_deref(), license_url.as_deref(), cover_image.as_deref(), readme.as_deref(), opts.dev),
         },
-        Commands::Log { command } => match command {
-            LogCommands::Query{ deploy_id, from, to, limit, follow} => log_query(opts.dev, deploy_id, from, to, limit, follow),
-        }
+        Commands::Log { deploy_id, from, to, limit, follow } => log_query(opts.dev, deploy_id, from, to, limit, follow),
     }
     .unwrap_or_else(|e| {
         if let Some(de) = find_in_chain::<DeepCtlError>(&e) {
