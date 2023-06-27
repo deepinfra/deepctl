@@ -29,7 +29,8 @@ const GITHUB_RELEASE_LATEST: &str = "https://github.com/deepinfra/deepctl/releas
 pub enum Auth {
     None,
     Optional,
-    Required
+    Required,
+    Manual(String),
 }
 
 #[derive(Error, Debug)]
@@ -320,6 +321,9 @@ where
             let access_token = get_access_token(dev).map_err(DeepCtlError::NotLoggedIn)?;
             rb = rb.bearer_auth(access_token);
         }
+        Auth::Manual(access_token) => {
+            rb = rb.bearer_auth(access_token);
+        }
         Auth::None => {}
     }
     rb = builder_map(rb);
@@ -402,13 +406,26 @@ fn auth_login(dev: bool) -> Result<()> {
             .ok_or(DeepCtlError::ApiMismatch("login should return access_token".into()))?;
 
         auth_set_token(token, dev, false)?;
-        // write_config(&ConfigData { access_token: token.into() }, dev)?;
-        println!("login successful");
-        Ok(())
     } else {
         println!("failed to open login page");
-        exit(1)
+        println!("please go http://deepinfra.com/dash/api_keys and paste your API KEY:");
+        let token = stdin_read_token()?;
+        auth_set_token(&token, dev, true)?;
     }
+    println!("login successful");
+    Ok(())
+}
+
+fn stdin_read_token() -> Result<String> {
+    let mut buffer = String::new();
+    let stdin = std::io::stdin();
+    stdin.read_line(&mut buffer)?;
+    Ok(buffer.trim().to_owned())
+}
+
+fn verify_token(token: &str, dev: bool) -> bool {
+    let res = get_response("/v1/me", Method::GET, dev, Auth::Manual(token.to_owned()));
+    res.is_ok() && res.unwrap().status() == reqwest::StatusCode::OK
 }
 
 fn read_config(dev: bool) -> Result<ConfigData> {
@@ -475,6 +492,9 @@ fn auth_docker_login(token: &str, dev: bool, _user_provided: bool) -> Result<()>
 }
 
 fn auth_set_token(token: &str, dev: bool, user_provided: bool) -> Result<()> {
+    if user_provided && !verify_token(token, dev) {
+        return Err(DeepCtlError::BadInput("token is not valid".to_owned()).into());
+    }
     write_config(&ConfigData { access_token: token.into() }, dev)?;
     auth_docker_login(token, dev, user_provided).or_else(|e| {
         eprintln!("Failed to store docker credentials. `deepctl push` would likely not work: {:?}", e);
