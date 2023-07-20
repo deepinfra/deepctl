@@ -72,34 +72,50 @@ pub mod docker {
         raw.to_lowercase()
     }
 
-    pub fn suggest_remote_name(local_name: &str, remote_name: Option<&str>, registry: &str, user: &str) -> Option<String> {
-        // Username can contain uppercase letters, which is NOT ok for docker
+    // return a suggested fully qualified image name (registry/username/reponame) and a prompt (yn) if something looks fishy or requires approval
+    pub fn suggest_remote_name(local_name: &str, remote_name: Option<&str>, registry: &str, user: &str) -> (Option<String>, Option<String>) {
         let user = sanitize_name(user);
+        let compose_prompt = |given_registry: &str, given_user: &str, not_sure: bool| -> Option<String> {
+            let mut res : Vec<String>  = vec![];
+            if ! given_registry.eq(registry) {
+                res.push(format!("registry looks incorrect (expected {}, got {})", registry, given_registry));
+            }
+            if ! given_user.eq(&user) {
+                res.push(format!("namespace looks incorrect (expected {}, got {})", user, given_user));
+            }
+            if not_sure || ! res.is_empty() {
+                res.push("are you sure".to_owned());
+                Some(res.join(", "))
+            } else {
+                None
+            }
+        };
         match remote_name {
             Some(remote_name) => {
                 let (comps, _tag) = deconstruct_name(remote_name);
-                if let Some(&first) = comps.first() {
-                    if first == registry {
-                        if comps.get(1).map(|&v| v) != Some(&user) {
-                            // The user component is not correct
-                            return None;
-                        }
-                        Some(remote_name.to_owned())
-                    } else if first == user {
-                        Some(format!("{}/{}", registry, remote_name))
-                    } else {
-                        Some(format!("{}/{}/{}", registry, user, remote_name))
-                    }
-                } else {
-                    None
+                match comps.len() {
+                    3 => {
+                        let &given_registry = comps.get(0).unwrap();
+                        let &given_name = comps.get(1).unwrap();
+                        (Some(remote_name.to_owned()), compose_prompt(given_registry, given_name, false))
+                    },
+                    2 => {
+                        let &given_name = comps.get(0).unwrap();
+                        (Some(format!("{}/{}", registry, remote_name)), compose_prompt(registry, given_name, false))
+                    },
+                    1 => (Some(format!("{}/{}/{}", registry, user, remote_name)), compose_prompt(registry, &user, true)),
+                    _ => (None, None),
                 }
             },
             None => {
                 let (comps, _tag) = deconstruct_name(local_name);
-                if let Some(&last) = comps.last() {
-                    Some(format!("{}/{}/{}", registry, user, last))
-                } else {
-                    None
+                match comps.last() {
+                    Some(&base_name) => {
+                        let suggested_name = &format!("{}/{}/{}", registry, user, base_name);
+                        (Some(suggested_name.to_owned()), compose_prompt(registry, &user, suggested_name.ends_with(local_name)))
+                    },
+                    // the source name is empty... this is kinda excessive
+                    None => (None, None),
                 }
             }
         }

@@ -955,8 +955,16 @@ fn get_display_name(dev: bool) -> Result<String> {
         .to_owned())
 }
 
-fn prompt(msg: &str) -> Result<String> {
-    eprint!("{}", msg);
+fn prompt(msg: &str, assume_yes: bool) -> Result<String> {
+    let actual_msg = if assume_yes {
+        format!("{} [Yn] -> ASSUMING YES\n", msg)
+    } else {
+        format!("{} [Yn] ", msg)
+    };
+    eprint!("{}", actual_msg);
+    if assume_yes {
+        return Ok("y".to_owned());
+    }
     let mut buffer = String::new();
     let stdin = std::io::stdin();
     stdin.read_line(&mut buffer)?;
@@ -966,16 +974,17 @@ fn prompt(msg: &str) -> Result<String> {
 fn push(source_image: &str, target_image: Option<&str>, assume_yes: bool, dev: bool) -> Result<()> {
     let display_name = get_display_name(dev)?;
     // if the source is already properly tagged, and there is no target provided, just use the source as-is
-    let target_image = if source_image.starts_with(deepctl::docker::DEEPINFRA_REGISTRY) && target_image == None {
-        Some(source_image)
-    } else {
-        target_image
-    };
-    if let Some(full_target_image) = deepctl::docker::suggest_remote_name(
+    // let target_image = if source_image.starts_with(deepctl::docker::DEEPINFRA_REGISTRY) && target_image == None {
+    //     Some(source_image)
+    // } else {
+    //     target_image
+    // };
+    if let (Some(full_target_image), sure_prompt) = deepctl::docker::suggest_remote_name(
             source_image, target_image,
             deepctl::docker::DEEPINFRA_REGISTRY, &display_name) {
-        if target_image.map(|ti| ti == full_target_image) != Some(true) && !assume_yes {
-            let response = prompt(&format!("Pushing {} to {}. [Yn]: ", source_image, full_target_image))?;
+        eprintln!("Pushing {} to {}", source_image, full_target_image);
+        if let Some(sure_prompt) = sure_prompt {
+            let response = prompt(&sure_prompt, assume_yes)?;
             if !(response == "" || response.to_lowercase() == "y") {
                 return Ok(());
             }
@@ -984,7 +993,7 @@ fn push(source_image: &str, target_image: Option<&str>, assume_yes: bool, dev: b
         deepctl::docker::push(&full_target_image)?;
         Ok(())
     } else {
-        Err(DeepCtlError::BadInput("bad TARGET_IMAGE".to_owned()).into())
+        Err(DeepCtlError::BadInput("can't figure out where to push, please specify proper TARGET_IMAGE".to_owned()).into())
     }
 }
 
