@@ -584,11 +584,27 @@ fn model_info(model: &str, version: Option<&str>, dev: bool) -> Result<()> {
         }
     }
 
+    let price_str: String = {
+        let pricing = json.get("pricing")
+            .ok_or(DeepCtlError::ApiMismatch(format!("model info should contain pricing object")))?;
+        let ptype = get_str(pricing, "type")?;
+        let (key, coef, sfx) = if ptype.eq("time") {
+            ("cents_per_sec", 0.01, "sec")
+        } else {
+            ("cents_per_output_token", 10.0, "Ktoken")
+        };
+        let val = pricing.get(key)
+            .and_then(|v| v.as_f64())
+            .ok_or(DeepCtlError::ApiMismatch(format!("model.pricing should contain {} of type number", key)))?;
+        format!("${:.4}/{}", val * coef, sfx)
+    };
+
     // println!("{:?}", json);
     println!("model: {}", model);
     println!("type: {}", get_str(&json, "type")?);
     println!("version: {}", get_str(&json, "version")?);
     println!("public: {}", json.get("public").and_then(|v| v.as_bool()) != Some(false));
+    println!("pricing: {}", price_str);
     if let Ok(mask_token) = get_str(&json, "mask_token") {
         println!("mask token: {}", mask_token);
     }
