@@ -1245,7 +1245,7 @@ fn main_version_check(dev: bool, force: bool) -> Result<()> {
         || force
         || crnt_version_data.as_ref().unwrap().last_check < latest_acceptable
     {
-        println!("checking version with server...");
+        // println!("checking version with server...");
         check_version_with_server(dev)?
     } else {
         crnt_version_data.unwrap()
@@ -1255,7 +1255,8 @@ fn main_version_check(dev: bool, force: bool) -> Result<()> {
 }
 
 fn prompt_update(reason: &str, latest: &str) {
-    println!(
+    // print to stderr
+    eprintln!(
         "Your version {} is {}. Please update to the latest version {}.",
         VERSION, reason, latest
     );
@@ -1269,7 +1270,7 @@ fn prompt_update(reason: &str, latest: &str) {
             sudo_str = "";
         }
     }
-    println!(
+    eprintln!(
         "Update to the latest version using `{}deepctl version update`",
         sudo_str
     );
