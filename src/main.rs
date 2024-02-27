@@ -1245,7 +1245,7 @@ fn main_version_check(dev: bool, force: bool) -> Result<()> {
         || force
         || crnt_version_data.as_ref().unwrap().last_check < latest_acceptable
     {
-        // println!("checking version with server...");
+        eprintln!("checking version with server...");
         check_version_with_server(dev)?
     } else {
         crnt_version_data.unwrap()
@@ -1293,7 +1293,7 @@ fn do_version_check(version_data: &VersionData, silent: bool) -> Result<()> {
         prompt_update("outdated", &version_data.latest)
     } else {
         if !silent {
-            println!("Your version ({}) is up to date.", VERSION);
+            eprintln!("Your version ({}) is up to date.", VERSION);
         }
     }
     Ok(())
