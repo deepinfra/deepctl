@@ -168,6 +168,9 @@ enum DeployCommands {
         /// show only deploys in given state
         #[arg(long, value_enum, default_value_t=DeployState::ACTIVE)]
         state: DeployState,
+        /// Only list deploys for a given model
+        #[arg(short, long)]
+        model: Option<String>,
     },
     /// get information on a particular deployment
     Info { deploy_id: String },
@@ -753,7 +756,7 @@ fn get_host(dev: bool) -> String {
     host
 }
 
-fn deploy_list(dev: bool, state: DeployState) -> Result<()> {
+fn deploy_list(dev: bool, state: DeployState, model: Option<&str>) -> Result<()> {
     let json = get_parsed_response("/deploy/list/", Method::GET, dev, Auth::Required)?;
     let allowed_statuses = match state {
         DeployState::ACTIVE => vec!["initializing", "deploying", "running"],
@@ -772,6 +775,10 @@ fn deploy_list(dev: bool, state: DeployState) -> Result<()> {
         .filter(|d| {
             let status = d.get("status").and_then(|s| s.as_str());
             status.is_some() && allowed_statuses.contains(&status.unwrap())
+        })
+        .filter(|d| {
+            let deploy_model = d.get("model_name").and_then(|s| s.as_str());
+            model.is_none() || (deploy_model.is_some() && model.unwrap().eq(deploy_model.unwrap()))
         })
         .collect();
     // deploys was parsed from json and filtered, so it can't fail
@@ -1381,7 +1388,7 @@ fn main() {
             }
         }
         Commands::Deploy { command } => match command {
-            DeployCommands::List { state } => deploy_list(opts.dev, state),
+            DeployCommands::List { state, model} => deploy_list(opts.dev, state, model.as_deref()),
             DeployCommands::Create { model, task } => deploy_create(&model, task.as_ref(), opts.dev),
             DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
