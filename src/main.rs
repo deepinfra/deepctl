@@ -5,6 +5,7 @@ use reqwest::blocking::multipart;
 use reqwest::{self, Method};
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
@@ -152,6 +153,21 @@ enum AuthCommands {
     },
 }
 
+#[derive(Serialize, Deserialize, ValueEnum, Eq, PartialEq, Clone, Debug)]
+#[serde(rename_all="kebab-case")]
+enum GpuType {
+    A100_80GB,
+}
+
+impl fmt::Display for GpuType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let repr = match self {
+            Self::A100_80GB => "A100-80GB",
+        };
+        write!(f, "{}", repr)
+    }
+}
+
 #[derive(Subcommand)]
 enum DeployCommands {
     /// deploy a new model
@@ -162,6 +178,43 @@ enum DeployCommands {
         /// The model task (optional)
         #[arg(short, long)]
         task: Option<ModelTask>,
+    },
+    /// Create a custom LLM deployment
+    CreateLLM {
+        /// New model name (will be prefixed with your username)
+        #[arg(long)]
+        model: String,
+        /// Type of gpu
+        #[arg(long)]
+        gpu: GpuType,
+        /// How many GPUs does the model require
+        #[arg(long)]
+        num_gpus: u32,
+        /// How many requests to handle concurrently
+        #[arg(long)]
+        max_batch_size: u32,
+        /// huggingface repository name
+        #[arg(long)]
+        hf_repo: String,
+        /// (optional) huggingface revision
+        #[arg(long)]
+        hf_revision: Option<String>,
+        /// (optional) huggingface token (for private repos)
+        #[arg(long)]
+        hf_token: Option<String>,
+    },
+    Update {
+        /// The deploy_id to update
+        deploy_id: String,
+        /// minimum number of model instances to run (up to 4)
+        #[arg(long)]
+        min_instances: u32,
+        /// maximum number of model instances to run (up to 4)
+        #[arg(long)]
+        max_instances: u32,
+        /// shutdown all deployments after no requests for that many seconds (min 60, disable - 0, requires min_instances = 0)
+        #[arg(long)]
+        inactive_shutdown: u32,
     },
     /// list deployed models
     List {
@@ -798,23 +851,70 @@ fn deploy_delete(deploy_id: &str, dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn deploy_create(model_name: &str, task: Option<&ModelTask>, dev: bool) -> Result<()> {
+fn handle_422(response: reqwest::blocking::Response) -> Result<reqwest::blocking::Response> {
+    if response.status() == 422 {
+        let value: serde_json::Value = serde_json::from_str(&response.text()?)?;
+        return Err(DeepCtlError::BadInput(format!("bad request {}", &serde_json::to_string_pretty(&value)?)).into());
+    }
+    Ok(response)
+}
+
+fn deploy_create_llm(model: &str, gpu_type: &GpuType, num_gpus: u32, max_batch_size: u32, hf_repo: &str, hf_revision: Option<&str>, hf_token: Option<&str>, dev: bool) -> Result<()> {
     let body = {
         let mut params = serde_json::Map::new();
-        params.insert("model_name".into(), model_name.into());
-        if let Some(task) = task {
-            params.insert("task".into(), serde_json::to_value(task).unwrap());
-        };
+        params.insert("model_name".into(), model.into());
+        params.insert("gpu".into(), gpu_type.to_string().into());
+        params.insert("num_gpus".into(), num_gpus.into());
+        params.insert("max_batch_size".into(), max_batch_size.into());
+
+        let mut hf_params = serde_json::Map::new();
+        hf_params.insert("repo".into(), hf_repo.into());
+        if let Some(hf_revision) = hf_revision {
+            hf_params.insert("revision".into(), hf_revision.into());
+        }
+        if let Some(hf_token) = hf_token {
+            hf_params.insert("token".into(), hf_token.into());
+        }
+        params.insert("hf".into(), hf_params.into());
         serde_json::to_string(&params)?
     };
-    let json = get_parsed_response_extra("/deploy/hf/", Method::POST, dev, Auth::Required, |rb| {
-        rb.header("Content-type", "application/json").body(body)
-    })?;
-
-    let deploy_id = json.get("deploy_id")
+    let result = handle_422(
+        get_response_extra(&format!("/deploy/llm"), Method::POST, dev, Auth::Required, |rb| {
+            rb.body(body)
+        })?
+    )?.error_for_status()?;
+    let res_obj: serde_json::Value = serde_json::from_str(&result.text()?)?;
+    let deploy_id = res_obj.get("deploy_id")
         .and_then(|v| v.as_str())
-        .ok_or(DeepCtlError::ApiMismatch("delpoy model response should contain deploy_id".into()))?;
-    println!("deployed {} {:?} -> {}", model_name, &task, deploy_id);
+        .ok_or(DeepCtlError::ApiMismatch("/deploy/llm response should contain dpeloy_id".into()))?;
+    println!("deployed -> {}", deploy_id);
+    wait_for_deploy(deploy_id, dev)?;
+    Ok(())
+}
+
+fn deploy_update(deploy_id: &str, min_instances: u32, max_instances: u32, inactive_shutdown: u32, dev: bool) -> Result<()> {
+    let body = {
+        let mut params = serde_json::Map::new();
+        let mut settings = serde_json::Map::new();
+        settings.insert("min_instances".into(), min_instances.into());
+        settings.insert("max_instances".into(), max_instances.into());
+        settings.insert("inactive_shutdown".into(), if inactive_shutdown == 0 {
+            serde_json::Value::Null
+        } else {
+            inactive_shutdown.into()
+        });
+        params.insert("settings".into(), settings.into());
+        serde_json::to_string(&params)?
+    };
+    handle_422(
+        get_response_extra(&format!("/deploy/{}", deploy_id), Method::PUT, dev, Auth::Required, |rb| {
+            rb.body(body)
+        })?
+    )?.error_for_status()?;
+    Ok(())
+}
+
+fn wait_for_deploy(deploy_id: &str, dev: bool) -> Result<()> {
     let mut last_status = String::new();
     loop {
         let tjson =
@@ -841,6 +941,29 @@ fn deploy_create(model_name: &str, task: Option<&ModelTask>, dev: bool) -> Resul
         }
         break;
     }
+    Ok(())
+}
+
+fn deploy_create(model_name: &str, task: Option<&ModelTask>, dev: bool) -> Result<()> {
+    let body = {
+        let mut params = serde_json::Map::new();
+        params.insert("model_name".into(), model_name.into());
+        if let Some(task) = task {
+            params.insert("task".into(), serde_json::to_value(task).unwrap());
+        };
+        serde_json::to_string(&params)?
+    };
+    let json = get_parsed_response_extra("/deploy/hf/", Method::POST, dev, Auth::Required, |rb| {
+        rb.header("Content-type", "application/json").body(body)
+    })?;
+
+    let deploy_id = json.get("deploy_id")
+        .and_then(|v| v.as_str())
+        .ok_or(DeepCtlError::ApiMismatch("delpoy model response should contain deploy_id".into()))?;
+    println!("deployed {} {:?} -> {}", model_name, &task, deploy_id);
+
+    wait_for_deploy(deploy_id, dev)?;
+
     Ok(())
 }
 
@@ -1390,7 +1513,9 @@ fn main() {
         Commands::Deploy { command } => match command {
             DeployCommands::List { state, model} => deploy_list(opts.dev, state, model.as_deref()),
             DeployCommands::Create { model, task } => deploy_create(&model, task.as_ref(), opts.dev),
+            DeployCommands::CreateLLM { model, gpu, num_gpus, max_batch_size, hf_repo, hf_revision, hf_token } => deploy_create_llm(&model, &gpu, num_gpus, max_batch_size, &hf_repo, hf_revision.as_deref(), hf_token.as_deref(), opts.dev),
             DeployCommands::Info { deploy_id } => deploy_info(&deploy_id, opts.dev),
+            DeployCommands::Update { deploy_id, min_instances, max_instances, inactive_shutdown } => deploy_update(&deploy_id, min_instances, max_instances, inactive_shutdown, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
         },
         Commands::Push { source_image, target_image, assume_yes } => push(&source_image, target_image.as_deref(), assume_yes, opts.dev),
