@@ -8,7 +8,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # rust is installed on the runner
     # make this workflow run on self-hosted runner
     # runs-on: self-hosted
     env:
@@ -18,12 +18,9 @@ jobs:
       - name: Install static link deps
         run: sudo apt update && sudo apt install -y pkg-config musl-tools libssl-dev
 
-      # Setup Rust, use the x86_64-apple-darwin target but the rest can be customized.
-      - name: Setup Rust
-        uses: ATiltedTree/setup-rust@v1
-        with:
-          targets: x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-apple-darwin
-          rust-version: stable
+      # Setup Rust targets
+      - name: Setup Rust targets
+        run: rustup target add x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-apple-darwin
 
       # Use the v1 of this action
       - name: Setup OSXCROSS
@@ -66,7 +63,7 @@ jobs:
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # rust is installed on the runner
     # make this workflow run on self-hosted runner
     # runs-on: self-hosted
     env:
@@ -76,12 +73,9 @@ jobs:
       - name: Install static link deps
         run: sudo apt update && sudo apt install -y pkg-config musl-tools libssl-dev
 
-      # Setup Rust, use the x86_64-apple-darwin target but the rest can be customized.
-      - name: Setup Rust
-        uses: ATiltedTree/setup-rust@v1
-        with:
-          targets: x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-apple-darwin
-          rust-version: stable
+      # Setup Rust targets
+      - name: Setup Rust targets
+        run: rustup target add x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-apple-darwin
 
       # Use the v1 of this action
       - name: Setup OSXCROSS
