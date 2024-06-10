@@ -105,16 +105,6 @@ enum Commands {
         #[arg(short('o'), value_parser = infer_out_parser)]
         outputs: Vec<(String, String)>,
     },
-    /// Push a local docker image to deepinfra registry for custom inference
-    Push {
-        /// an existing local image name to be pushed
-        source_image: String,
-        /// an optional remote image name (it would be inferred otherwise)
-        target_image: Option<String>,
-        /// assume yes
-        #[arg(short('y'), default_value_t=false)]
-        assume_yes: bool,
-    },
     /// Query inference logs
     Log {
         /// query logs for this deploy_id
@@ -535,23 +525,13 @@ fn auth_token(dev: bool) -> Result<()> {
     Ok(())
 }
 
-fn auth_docker_login(token: &str, dev: bool, _user_provided: bool) -> Result<()> {
-    Ok(deepctl::docker::login(&get_display_name(dev)?, token, deepctl::docker::DEEPINFRA_REGISTRY)?)
-}
-
 fn auth_set_token(token: &str, dev: bool, user_provided: bool) -> Result<()> {
     if user_provided && !verify_token(token, dev) {
         return Err(DeepCtlError::BadInput("token is not valid".to_owned()).into());
     }
     write_config(&ConfigData { access_token: token.into() }, dev)?;
     println!("token stored successfully");
-    println!("--- running docker login ---");
-    let docker_res = auth_docker_login(token, dev, user_provided);
-    println!("--- docker login finished ---");
-    docker_res.or_else(|e| {
-        eprintln!("Failed to store docker credentials. `deepctl push` would likely not work: {:?}", e);
-        Ok(())
-    })
+    Ok(())
 }
 
 fn get_http_client(dev: bool) -> Result<reqwest::blocking::Client> {
@@ -1092,57 +1072,6 @@ fn infer_out_part(value: &serde_json::Value, location: &str) -> Result<()> {
     }
 }
 
-fn get_display_name(dev: bool) -> Result<String> {
-    let profile = get_parsed_response("/v1/me", Method::GET, dev, Auth::Required)
-        .with_context(|| format!("failed to fetch profile"))?;
-    Ok(profile.get("display_name")
-        .and_then(|dn| dn.as_str())
-        .ok_or(DeepCtlError::ApiMismatch("/v1/me doesn't contain display_name".into()))?
-        .to_owned())
-}
-
-fn prompt(msg: &str, assume_yes: bool) -> Result<String> {
-    let actual_msg = if assume_yes {
-        format!("{} [Yn] -> ASSUMING YES\n", msg)
-    } else {
-        format!("{} [Yn] ", msg)
-    };
-    eprint!("{}", actual_msg);
-    if assume_yes {
-        return Ok("y".to_owned());
-    }
-    let mut buffer = String::new();
-    let stdin = std::io::stdin();
-    stdin.read_line(&mut buffer)?;
-    Ok(buffer.trim().to_owned())
-}
-
-fn push(source_image: &str, target_image: Option<&str>, assume_yes: bool, dev: bool) -> Result<()> {
-    let display_name = get_display_name(dev)?;
-    // if the source is already properly tagged, and there is no target provided, just use the source as-is
-    // let target_image = if source_image.starts_with(deepctl::docker::DEEPINFRA_REGISTRY) && target_image == None {
-    //     Some(source_image)
-    // } else {
-    //     target_image
-    // };
-    if let (Some(full_target_image), sure_prompt) = deepctl::docker::suggest_remote_name(
-            source_image, target_image,
-            deepctl::docker::DEEPINFRA_REGISTRY, &display_name) {
-        eprintln!("Pushing {} to {}", source_image, full_target_image);
-        if let Some(sure_prompt) = sure_prompt {
-            let response = prompt(&sure_prompt, assume_yes)?;
-            if !(response == "" || response.to_lowercase() == "y") {
-                return Ok(());
-            }
-        }
-        deepctl::docker::tag(source_image, &full_target_image)?;
-        deepctl::docker::push(&full_target_image)?;
-        Ok(())
-    } else {
-        Err(DeepCtlError::BadInput("can't figure out where to push, please specify proper TARGET_IMAGE".to_owned()).into())
-    }
-}
-
 fn infer(model_name: Option<&str>, version: Option<&str>, deploy_id: Option<&str>, args: &Vec<(String, String)>, outs: &Vec<(String, String)>, dev: bool) -> Result<()> {
     let form = infer_body(args)?;
 
@@ -1518,7 +1447,6 @@ fn main() {
             DeployCommands::Update { deploy_id, min_instances, max_instances, inactive_shutdown } => deploy_update(&deploy_id, min_instances, max_instances, inactive_shutdown, opts.dev),
             DeployCommands::Delete { deploy_id } => deploy_delete(&deploy_id, opts.dev),
         },
-        Commands::Push { source_image, target_image, assume_yes } => push(&source_image, target_image.as_deref(), assume_yes, opts.dev),
         Commands::Infer {
             model,
             version,
