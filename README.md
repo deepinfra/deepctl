@@ -4,6 +4,7 @@
 > **deepctl is deprecated and no longer maintained.** This repository is archived, and `deepctl auth login` will stop working.
 >
 > Use the [Deep Infra HTTP API](https://docs.deepinfra.com/) or any OpenAI-compatible SDK instead. Create API keys in the [dashboard](https://deepinfra.com/dash/api_keys).
+
 Command line tool for [Deep Infra cloud ML inference service](https://deepinfra.com/).
 
 ## Installation
