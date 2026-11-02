@@ -1,7 +1,9 @@
 # deepctl
 
 > [!WARNING]
-> **deepctl is deprecated and no longer maintained.** This repository is archived, and `deepctl auth login` will stop working.
+> **deepctl is deprecated and no longer maintained.** This repository is archived, and `deepctl auth login` stops working on 2026-11-06.
+>
+> To keep using deepctl, create an API key in the [dashboard](https://deepinfra.com/dash/api_keys) and store it with `deepctl auth set-token <key>`.
 >
 > Use the [Deep Infra HTTP API](https://docs.deepinfra.com/) or any OpenAI-compatible SDK instead. Create API keys in the [dashboard](https://deepinfra.com/dash/api_keys).
 
@@ -22,10 +24,11 @@ You can also download deepctl from [Releases](https://github.com/deepinfra/deepc
 ## Usage
 
 #### Sign in
-You need a Github account to use deepctl. This command will open your Github Sign-on page in your browser. Follow instructions there.
+Create an API key in the [dashboard](https://deepinfra.com/dash/api_keys), then store it:
 ```bash
-deepctl auth login
+deepctl auth set-token <key>
 ```
+`deepctl auth login` stops working on 2026-11-06.
 #### Auth token
 You can view your Deep Infra API auth token to use it in your applications using the following command or in the [dashboard](https://deepinfra.com/dash/api_keys).
 ```bash
